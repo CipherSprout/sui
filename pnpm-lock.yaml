@@ -196,6 +196,7 @@ importers:
       '@mysten/sui.js': workspace:*
       '@mysten/wallet-standard': workspace:*
       '@noble/hashes': ^1.1.2
+      '@playwright/test': ^1.29.1
       '@reduxjs/toolkit': ^1.8.3
       '@scure/bip32': ^1.1.0
       '@scure/bip39': ^1.1.0
@@ -249,6 +250,7 @@ importers:
       mitt: ^3.0.0
       onchange: ^7.1.0
       plausible-tracker: ^0.3.0
+      playwright: ^1.29.1
       postcss: ^8.4.19
       postcss-loader: ^7.0.2
       postcss-preset-env: ^7.8.3
@@ -324,7 +326,7 @@ importers:
       rxjs: 7.5.6
       semver: 7.3.8
       stream-browserify: 3.0.0
-      tailwindcss: 3.2.4_ts-node@10.9.1
+      tailwindcss: 3.2.4_v776zzvn44o7tpgzieipaairwm
       throttle-debounce: 5.0.0
       tweetnacl: 1.0.3
       uuid: 8.3.2
@@ -334,6 +336,7 @@ importers:
     devDependencies:
       '@babel/preset-env': 7.20.2
       '@babel/preset-typescript': 7.18.6
+      '@playwright/test': 1.29.1
       '@sentry/react': 7.24.2_react@18.2.0
       '@sentry/tracing': 7.24.2
       '@sentry/webpack-plugin': 1.20.0
@@ -374,6 +377,7 @@ importers:
       mini-css-extract-plugin: 2.6.1_webpack@5.74.0
       onchange: 7.1.0
       plausible-tracker: 0.3.8
+      playwright: 1.29.1
       postcss: 8.4.19
       postcss-loader: 7.0.2_fzmr2tnwmxef4blqoxm3aqno34
       postcss-preset-env: 7.8.3_postcss@8.4.19
@@ -4340,6 +4344,15 @@ packages:
     dependencies:
       mkdirp: 1.0.4
       rimraf: 3.0.2
+    dev: true
+
+  /@playwright/test/1.29.1:
+    resolution: {integrity: sha512-iQxk2DX5U9wOGV3+/Jh9OHPsw5H3mleUL2S4BgQuwtlAfK3PnKvn38m4Rg9zIViGHVW24opSm99HQm/UFLEy6w==}
+    engines: {node: '>=14'}
+    hasBin: true
+    dependencies:
+      '@types/node': 18.11.13
+      playwright-core: 1.29.1
     dev: true
 
   /@pmmmwh/react-refresh-webpack-plugin/0.5.10_wbzyci4dlg67nv6wch62lcny2q:
@@ -14978,6 +14991,21 @@ packages:
     resolution: {integrity: sha512-lmOWYQ7s9KOUJ1R+YTOR3HrjdbxIS2Z4de0P/Jx2dQPteznJl2eX3tXxKClpvbfyGP59B5bbhW8ftN59HbbFSg==}
     engines: {node: '>=10'}
 
+  /playwright-core/1.29.1:
+    resolution: {integrity: sha512-20Ai3d+lMkWpI9YZYlxk8gxatfgax5STW8GaMozAHwigLiyiKQrdkt7gaoT9UQR8FIVDg6qVXs9IoZUQrDjIIg==}
+    engines: {node: '>=14'}
+    hasBin: true
+    dev: true
+
+  /playwright/1.29.1:
+    resolution: {integrity: sha512-lasC+pMqsQ2uWhNurt3YK3xo0gWlMjslYUylKbHcqF/NTjwp9KStRGO7S6wwz2f52GcSnop8XUK/GymJjdzrxw==}
+    engines: {node: '>=14'}
+    hasBin: true
+    requiresBuild: true
+    dependencies:
+      playwright-core: 1.29.1
+    dev: true
+
   /polished/4.2.2:
     resolution: {integrity: sha512-Sz2Lkdxz6F2Pgnpi9U5Ng/WdWAUZxmHrNPoVlm3aAemxoy2Qy7LGjQg4uf8qKelDAUW94F4np3iH2YPf2qefcQ==}
     engines: {node: '>=10'}
@@ -17901,10 +17929,12 @@ packages:
       - ts-node
     dev: true
 
-  /tailwindcss/3.2.4_ts-node@10.9.1:
+  /tailwindcss/3.2.4_v776zzvn44o7tpgzieipaairwm:
     resolution: {integrity: sha512-AhwtHCKMtR71JgeYDaswmZXhPcW9iuI9Sp2LvZPo9upDZ7231ZJ7eA9RaURbhpXGVlrjX4cFNlB4ieTetEb7hQ==}
     engines: {node: '>=12.13.0'}
     hasBin: true
+    peerDependencies:
+      postcss: ^8.0.9
     dependencies:
       arg: 5.0.2
       chokidar: 3.5.3
