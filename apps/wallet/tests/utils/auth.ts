@@ -1,4 +1,5 @@
-import { Page } from '@playwright/test';
+import fs from 'fs';
+import { BrowserContext, Page } from '@playwright/test';
 
 export const PASSWORD = 'mystenlabs';
 
@@ -18,4 +19,15 @@ export async function createWallet(page: Page, extensionUrl: string) {
     await page.getByRole('button', { name: /Open Sui Wallet/ }).click();
 }
 
-export function unlock(page: Page) {}
+export async function restore(context: BrowserContext) {
+    const authString = await fs.promises.readFile('./auth.json', 'utf-8');
+    const [background] = context.serviceWorkers();
+    await background.evaluate(
+        async (authString) => {
+            const auth = JSON.parse(authString);
+            await chrome.storage.session.set(auth.session);
+            await chrome.storage.local.set(auth.local);
+        },
+        [authString]
+    );
+}

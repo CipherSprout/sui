@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, test } from './fixtures';
-import { createWallet } from './utils/auth';
+import { createWallet, restore } from './utils/auth';
 
-test('wallet unlock', async ({ page, context, extensionUrl }) => {
+test.only('wallet unlock', async ({ page, context, extensionUrl }) => {
+    await restore(context);
     await createWallet(page, extensionUrl);
     await page.getByTestId('menu').click();
     await page.getByRole('button', { name: /Lock Wallet/ }).click();

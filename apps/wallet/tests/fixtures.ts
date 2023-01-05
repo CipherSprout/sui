@@ -5,7 +5,7 @@ import { test as base, chromium, type BrowserContext } from '@playwright/test';
 import path from 'path';
 
 const EXTENSION_PATH = path.join(__dirname, '../dist');
-const LAUNCH_ARGS = [
+export const LAUNCH_ARGS = [
     `--disable-extensions-except=${EXTENSION_PATH}`,
     `--load-extension=${EXTENSION_PATH}`,
     // Ensure userAgent is correctly set in serviceworker:
