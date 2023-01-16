@@ -11,4 +11,5 @@ pub mod elliptic_curve;
 pub mod groth16;
 pub mod hash;
 pub mod hmac;
+pub mod unsecure;
 pub mod tbls;
