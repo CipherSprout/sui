@@ -17,6 +17,7 @@ use std::time::Duration;
 use test_utils::authority::test_and_configure_authority_configs;
 use tokio::sync::broadcast;
 use tokio::time::{interval, sleep};
+use sui_types::crypto::AuthorityPublicKey;
 
 #[derive(Clone)]
 struct NoOpExecutionState {
@@ -41,7 +42,7 @@ impl ExecutionState for NoOpExecutionState {
 }
 
 async fn send_transactions(
-    name: &bls12381::min_sig::BLS12381PublicKey,
+    name: &AuthorityPublicKey,
     worker_cache: SharedWorkerCache,
     epoch: Epoch,
     mut rx_shutdown: broadcast::Receiver<()>,
