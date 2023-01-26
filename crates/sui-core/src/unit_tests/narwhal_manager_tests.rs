@@ -14,10 +14,10 @@ use narwhal_worker::TrivialTransactionValidator;
 use prometheus::Registry;
 use std::sync::Arc;
 use std::time::Duration;
+use sui_types::crypto::AuthorityPublicKey;
 use test_utils::authority::test_and_configure_authority_configs;
 use tokio::sync::broadcast;
 use tokio::time::{interval, sleep};
-use sui_types::crypto::AuthorityPublicKey;
 
 #[derive(Clone)]
 struct NoOpExecutionState {
