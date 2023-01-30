@@ -48,7 +48,7 @@ pub enum DeleteKind {
 
 pub enum ObjectChange {
     Write(SingleTxContext, Object, WriteKind),
-    Delete(SingleTxContext, SequenceNumber, DeleteKind),
+    Delete(SingleTxContext, Object, SequenceNumber, DeleteKind),
 }
 
 #[derive(Clone)]

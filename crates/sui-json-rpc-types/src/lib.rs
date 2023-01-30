@@ -30,7 +30,7 @@ use serde_json::Value;
 use serde_with::serde_as;
 use sui_json::SuiJsonValue;
 use sui_types::base_types::{
-    AuthorityName, ObjectDigest, ObjectID, ObjectInfo, ObjectRef, SequenceNumber, SuiAddress,
+    AuthorityName, ObjectDigest, ObjectID, ObjectType, ObjectInfo, ObjectRef, ObjectRefAndType, SequenceNumber, SuiAddress,
     TransactionDigest, TransactionEffectsDigest,
 };
 use sui_types::coin::CoinMetadata;
@@ -344,7 +344,7 @@ pub enum MoveFunctionArgType {
     Object(ObjectValueKind),
 }
 
-#[derive(Serialize, Deserialize, Debug, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SuiTransactionResponse {
     pub certificate: SuiCertifiedTransaction,
     pub effects: SuiTransactionEffects,
@@ -411,7 +411,7 @@ pub struct SuiTBlsSignRandomnessObjectResponse {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Serialize, Deserialize, Debug, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum SuiExecuteTransactionResponse {
     // TODO: Change to CertifiedTransactionEffects eventually.
     EffectsCert {
@@ -619,6 +619,28 @@ impl From<ObjectRef> for SuiObjectRef {
             object_id: oref.0,
             version: oref.1,
             digest: oref.2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(rename_all = "camelCase", rename = "ObjectRefAndType")]
+pub struct SuiObjectRefAndType {
+    pub object_ref: ObjectRef,
+    pub object_type: ObjectType,
+}
+
+// impl SuiObjectRefAndType {
+//     pub fn to_object_ref_and_type(&self) -> ObjectRefAndType{
+//         (self.object_ref, self.object_type)
+//     }
+// }
+
+impl From<ObjectRefAndType> for SuiObjectRefAndType {
+    fn from(oref: ObjectRefAndType) -> Self {
+        Self {
+            object_ref: oref.0,
+            object_type: oref.1
         }
     }
 }
@@ -1832,7 +1854,7 @@ impl TryFrom<VerifiedCertificate> for SuiCertifiedTransaction {
 }
 
 /// The certified Transaction Effects which has signatures from >= 2/3 of validators
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "CertifiedTransactionEffects", rename_all = "camelCase")]
 pub struct SuiCertifiedTransactionEffects {
     pub transaction_effects_digest: TransactionEffectsDigest,
@@ -1879,7 +1901,7 @@ impl SuiCertifiedTransactionEffects {
 }
 
 /// The response from processing a transaction or a certified transaction
-#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "TransactionEffects", rename_all = "camelCase")]
 pub struct SuiTransactionEffects {
     // The status of the execution
@@ -1887,7 +1909,7 @@ pub struct SuiTransactionEffects {
     pub gas_used: SuiGasCostSummary,
     // The object references of the shared objects used in this transaction. Empty if no shared objects were used.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub shared_objects: Vec<SuiObjectRef>,
+    pub shared_objects: Vec<SuiObjectRefAndType>,
     // The transaction digest
     pub transaction_digest: TransactionDigest,
     // ObjectRef and owner of new objects created.
@@ -1903,10 +1925,10 @@ pub struct SuiTransactionEffects {
     pub unwrapped: Vec<OwnedObjectRef>,
     // Object Refs of objects now deleted (the old refs).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deleted: Vec<SuiObjectRef>,
+    pub deleted: Vec<SuiObjectRefAndType>,
     // Object refs of objects now wrapped in other objects.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub wrapped: Vec<SuiObjectRef>,
+    pub wrapped: Vec<SuiObjectRefAndType>,
     // The updated gas object reference. Have a dedicated field for convenient access.
     // It's also included in mutated.
     pub gas_object: OwnedObjectRef,
@@ -1979,13 +2001,13 @@ impl Display for SuiTransactionEffects {
         if !self.deleted.is_empty() {
             writeln!(writer, "Deleted Objects:")?;
             for oref in &self.deleted {
-                writeln!(writer, "  - ID: {}", oref.object_id)?;
+                writeln!(writer, "  - ID: {}", oref.object_ref.0)?;
             }
         }
         if !self.wrapped.is_empty() {
             writeln!(writer, "Wrapped Objects:")?;
             for oref in &self.wrapped {
-                writeln!(writer, "  - ID: {}", oref.object_id)?;
+                writeln!(writer, "  - ID: {}", oref.object_ref.0)?;
             }
         }
         if !self.unwrapped.is_empty() {
@@ -2103,16 +2125,16 @@ impl From<ExecutionStatus> for SuiExecutionStatus {
     }
 }
 
-fn to_sui_object_ref(refs: Vec<ObjectRef>) -> Vec<SuiObjectRef> {
-    refs.into_iter().map(SuiObjectRef::from).collect()
+fn to_sui_object_ref(refs: Vec<ObjectRefAndType>) -> Vec<SuiObjectRefAndType> {
+    refs.into_iter().map(SuiObjectRefAndType::from).collect()
 }
 
-fn to_owned_ref(owned_refs: Vec<(ObjectRef, Owner)>) -> Vec<OwnedObjectRef> {
+fn to_owned_ref(owned_refs: Vec<(ObjectRefAndType, Owner)>) -> Vec<OwnedObjectRef> {
     owned_refs
         .into_iter()
         .map(|(oref, owner)| OwnedObjectRef {
             owner,
-            reference: oref.into(),
+            reference: oref.0.into(),
         })
         .collect()
 }
