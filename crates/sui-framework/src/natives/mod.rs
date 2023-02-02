@@ -257,6 +257,11 @@ pub fn all_natives(
             "is_one_time_witness",
             make_native!(types::is_one_time_witness),
         ),
+        (
+            "unsecure",
+            "unsecure_verify",
+            make_native!(unsecure::unsecure_verify),
+        ),
     ];
     sui_natives
         .iter()
