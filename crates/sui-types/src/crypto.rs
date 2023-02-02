@@ -3,10 +3,7 @@
 use anyhow::{anyhow, Error};
 use derive_more::From;
 use eyre::eyre;
-use fastcrypto::bls12381::min_sig::{
-    BLS12381AggregateSignature, BLS12381AggregateSignatureAsBytes, BLS12381KeyPair,
-    BLS12381PrivateKey, BLS12381PublicKey, BLS12381Signature,
-};
+use fastcrypto::bls12381::min_sig::BLS12381PublicKey;
 use fastcrypto::ed25519::{Ed25519KeyPair, Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature};
 use fastcrypto::secp256k1::{Secp256k1KeyPair, Secp256k1PublicKey, Secp256k1Signature};
 use fastcrypto::secp256r1::{Secp256r1KeyPair, Secp256r1PublicKey, Secp256r1Signature};
