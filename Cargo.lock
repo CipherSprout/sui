@@ -2590,7 +2590,7 @@ dependencies = [
 [[package]]
 name = "fastcrypto"
 version = "0.1.4"
-source = "git+https://github.com/MystenLabs/fastcrypto?rev=285e3f238112703cdfb7eb21e0ea3100e2882e14#285e3f238112703cdfb7eb21e0ea3100e2882e14"
+source = "git+https://github.com/MystenLabs/fastcrypto?rev=c7dfb9f40cd5fb8ca3d673678f74312b4904709d#c7dfb9f40cd5fb8ca3d673678f74312b4904709d"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2638,7 +2638,7 @@ dependencies = [
 [[package]]
 name = "fastcrypto-derive"
 version = "0.1.2"
-source = "git+https://github.com/MystenLabs/fastcrypto?rev=285e3f238112703cdfb7eb21e0ea3100e2882e14#285e3f238112703cdfb7eb21e0ea3100e2882e14"
+source = "git+https://github.com/MystenLabs/fastcrypto?rev=c7dfb9f40cd5fb8ca3d673678f74312b4904709d#c7dfb9f40cd5fb8ca3d673678f74312b4904709d"
 dependencies = [
  "convert_case 0.6.0",
  "proc-macro2 1.0.51",
@@ -2649,7 +2649,7 @@ dependencies = [
 [[package]]
 name = "fastcrypto-tbls"
 version = "0.1.0"
-source = "git+https://github.com/MystenLabs/fastcrypto?rev=285e3f238112703cdfb7eb21e0ea3100e2882e14#285e3f238112703cdfb7eb21e0ea3100e2882e14"
+source = "git+https://github.com/MystenLabs/fastcrypto?rev=c7dfb9f40cd5fb8ca3d673678f74312b4904709d#c7dfb9f40cd5fb8ca3d673678f74312b4904709d"
 dependencies = [
  "bincode",
  "digest 0.10.6",
@@ -2665,7 +2665,7 @@ dependencies = [
 [[package]]
 name = "fastcrypto-zkp"
 version = "0.1.0"
-source = "git+https://github.com/MystenLabs/fastcrypto?rev=285e3f238112703cdfb7eb21e0ea3100e2882e14#285e3f238112703cdfb7eb21e0ea3100e2882e14"
+source = "git+https://github.com/MystenLabs/fastcrypto?rev=c7dfb9f40cd5fb8ca3d673678f74312b4904709d#c7dfb9f40cd5fb8ca3d673678f74312b4904709d"
 dependencies = [
  "ark-bls12-381",
  "ark-ec",
@@ -9871,9 +9871,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.24.1"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d9f76183f91ecfb55e1d7d5602bd1d979e38a3a522fe900241cf195624d67ae"
+checksum = "c8e00990ebabbe4c14c08aca901caed183ecd5c09562a12c824bb53d3c3fd3af"
 dependencies = [
  "autocfg",
  "bytes",
