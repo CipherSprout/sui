@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { RawSigner, SuiEventEnvelope } from '../../src';
+import { Commands, RawSigner, SuiEventEnvelope, Transaction } from '../../src';
 import {
   DEFAULT_GAS_BUDGET,
   DEFAULT_RECIPIENT,
@@ -29,18 +29,11 @@ describe('Event Subscription API', () => {
       mockCallback,
     );
 
-    const inputCoins = await toolbox.provider.getGasObjectsOwnedByAddress(
-      toolbox.address(),
-    );
+    const tx = new Transaction();
+    tx.add(Commands.TransferObjects([tx.gas], tx.input(DEFAULT_RECIPIENT)));
+    tx.setGasBudget(DEFAULT_GAS_BUDGET);
 
-    await signer.signAndExecuteTransaction({
-      kind: 'payAllSui',
-      data: {
-        inputCoins: inputCoins.map((o) => o.objectId),
-        recipient: DEFAULT_RECIPIENT,
-        gasBudget: DEFAULT_GAS_BUDGET,
-      },
-    });
+    await signer.signAndExecuteTransaction(tx);
 
     const subFoundAndRemoved = await toolbox.provider.unsubscribeEvent(
       subscriptionId,

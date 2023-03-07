@@ -15,8 +15,17 @@ import {
   union,
   assert,
   Struct,
+  define,
 } from 'superstruct';
+import { TypeTagSerializer } from '../signers/txn-data-serializers/type-tag-serializer';
+import { TypeTag } from '../types';
 import { COMMAND_TYPE, WellKnownEncoding } from './utils';
+
+// NOTE: this isn't validated
+const typetag = define<TypeTag>('TypeTag', () => true);
+
+const option = <T extends Struct<any, any>>(some: T) =>
+  union([object({ None: literal(null) }), object({ Some: some })]);
 
 export const TransactionInput = object({
   kind: literal('Input'),
@@ -58,8 +67,10 @@ export const PureCommandArgument = (type: string) => {
 
 export const MoveCallCommand = object({
   kind: literal('MoveCall'),
-  target: string(),
-  typeArguments: array(string()),
+  package: string(),
+  module: string(),
+  function: string(),
+  type_arguments: array(typetag),
   arguments: array(CommandArgument),
 });
 export type MoveCallCommand = Infer<typeof MoveCallCommand>;
@@ -87,7 +98,7 @@ export type MergeCoinsCommand = Infer<typeof MergeCoinsCommand>;
 
 export const MakeMoveVecCommand = object({
   kind: literal('MakeMoveVec'),
-  type: optional(string()),
+  type: optional(option(string())),
   objects: array(ObjectCommandArgument),
 });
 export type MakeMoveVecCommand = Infer<typeof MakeMoveVecCommand>;
@@ -117,20 +128,8 @@ export function getTransactionCommandType(data: unknown) {
 
 // Refined types for move call which support both the target interface, and the
 // deconstructed interface:
-type MoveCallInput = (
-  | {
-      target: string;
-      package?: never;
-      module?: never;
-      function?: never;
-    }
-  | {
-      target?: never;
-      package: string;
-      module: string;
-      function: string;
-    }
-) & {
+type MoveCallInput = {
+  target: string;
   typeArguments: string[];
   arguments: CommandArgument[];
 };
@@ -140,13 +139,16 @@ type MoveCallInput = (
  */
 export const Commands = {
   MoveCall(input: MoveCallInput): MoveCallCommand {
+    const [packageId, moduleName, functionName] = input.target.split('::');
     return {
       kind: 'MoveCall',
-      target:
-        input.target ??
-        [input.package, input.module, input.function].join('::'),
+      package: packageId,
+      module: moduleName,
+      function: functionName,
       arguments: input.arguments,
-      typeArguments: input.typeArguments,
+      type_arguments: input.typeArguments.map((tag) =>
+        TypeTagSerializer.parseFromStr(tag, true),
+      ),
     };
   },
   TransferObjects(
@@ -168,6 +170,16 @@ export const Commands = {
   Publish(modules: number[][]): PublishCommand {
     return { kind: 'Publish', modules };
   },
-  // TODO:
-  MakeMoveVec() {},
+  MakeMoveVec({
+    type,
+    objects,
+  }: Omit<MakeMoveVecCommand, 'kind' | 'type'> & {
+    type?: string;
+  }): MakeMoveVecCommand {
+    return {
+      kind: 'MakeMoveVec',
+      type: type ? { Some: type } : { None: null },
+      objects,
+    };
+  },
 };

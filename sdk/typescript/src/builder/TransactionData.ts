@@ -57,6 +57,11 @@ export type SerializedTransactionDataBuilder = Infer<
   typeof SerializedTransactionDataBuilder
 >;
 
+interface TransactionDataBuildOptions {
+  size?: number;
+  omitGasInfo?: boolean;
+}
+
 export class TransactionDataBuilder {
   static restore(data: SerializedTransactionDataBuilder) {
     assert(data, SerializedTransactionDataBuilder);
@@ -80,21 +85,23 @@ export class TransactionDataBuilder {
     this.commands = clone?.commands ?? [];
   }
 
-  build({ size }: { size?: number } = {}) {
-    if (!this.gasConfig.budget) {
-      throw new Error('Missing gas budget');
-    }
+  build({ size, omitGasInfo }: TransactionDataBuildOptions = {}) {
+    if (!omitGasInfo) {
+      if (!this.gasConfig.budget) {
+        throw new Error('Missing gas budget');
+      }
 
-    if (!this.gasConfig.payment) {
-      throw new Error('Missing gas payment');
-    }
+      if (!this.gasConfig.payment) {
+        throw new Error('Missing gas payment');
+      }
 
-    if (!this.gasConfig.price) {
-      throw new Error('Missing gas price');
-    }
+      if (!this.gasConfig.price) {
+        throw new Error('Missing gas price');
+      }
 
-    if (!this.sender) {
-      throw new Error('Missing transaction sender');
+      if (!this.sender) {
+        throw new Error('Missing transaction sender');
+      }
     }
 
     // Resolve inputs down to values:
@@ -102,6 +109,19 @@ export class TransactionDataBuilder {
       assert(input.value, BuilderCallArg);
       return input.value;
     });
+
+    const transactionKind = {
+      Single: {
+        ProgrammableTransaction: {
+          inputs,
+          commands: this.commands,
+        },
+      },
+    };
+
+    if (omitGasInfo) {
+      return builder.ser('TransactionKind', transactionKind, size).toBytes();
+    }
 
     const transactionData = {
       sender: this.sender,
@@ -112,14 +132,7 @@ export class TransactionDataBuilder {
         price: this.gasConfig.price,
         budget: this.gasConfig.budget,
       },
-      kind: {
-        Single: {
-          ProgrammableTransaction: {
-            inputs,
-            commands: this.commands,
-          },
-        },
-      },
+      kind: transactionKind,
     };
 
     return builder

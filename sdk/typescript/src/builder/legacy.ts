@@ -112,9 +112,7 @@ export async function convertToTransactionBuilder(
     case 'moveCall':
       tx.add(
         Commands.MoveCall({
-          package: data.packageObjectId,
-          module: data.module,
-          function: data.function,
+          target: `${data.packageObjectId}::${data.module}::${data.function}`,
           arguments: data.arguments.map((arg) => tx.input(arg)),
           typeArguments: data.typeArguments.map((arg) =>
             typeof arg === 'string' ? arg : TypeTagSerializer.tagToString(arg),

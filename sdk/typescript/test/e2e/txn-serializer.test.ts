@@ -16,10 +16,8 @@ import {
   getObjectReference,
   TransactionData,
   TransactionKind,
-  PaySuiTransaction,
   getObjectId,
   PayAllSuiTx,
-  PayAllSuiTransaction,
 } from '../../src';
 import { CallArgSerializer } from '../../src/signers/txn-data-serializers/call-arg-serializer';
 import {
@@ -248,7 +246,7 @@ describe('Transaction Serialization and deserialization', () => {
         inputCoins: [getObjectId(coins[0]).substring(2)],
         recipients: [DEFAULT_RECIPIENT.substring(2)],
         amounts: [BigInt(100)] as unknown as number[],
-      } as PaySuiTransaction,
+      },
     } as UnserializedSignableTransaction;
     expect(expectedTx).toEqual(deserialized);
   });
@@ -294,7 +292,7 @@ describe('Transaction Serialization and deserialization', () => {
       data: {
         inputCoins: [getObjectId(coins[0]).substring(2)],
         recipient: DEFAULT_RECIPIENT.substring(2),
-      } as PayAllSuiTransaction,
+      },
     } as UnserializedSignableTransaction;
     expect(expectedTx).toEqual(deserialized);
   });

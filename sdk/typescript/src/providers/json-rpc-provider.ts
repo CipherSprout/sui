@@ -72,6 +72,7 @@ import { toB64 } from '@mysten/bcs';
 import { SerializedSignature } from '../cryptography/signature';
 import { Connection, devnetConnection } from '../rpc/connection';
 import { Transaction } from '../builder';
+import { convertToTransactionBuilder } from '../builder/legacy';
 
 export const TARGETED_RPC_VERSION = '0.27.0';
 
@@ -801,7 +802,12 @@ export class JsonRpcProvider extends Provider {
     try {
       let devInspectTxBytes;
       if (Transaction.is(tx)) {
-        devInspectTxBytes = await tx.build({ provider: this });
+        devInspectTxBytes = toB64(
+          await tx.build({
+            provider: this,
+            omitGasInfo: true,
+          }),
+        );
       } else if (typeof tx === 'string') {
         devInspectTxBytes = tx;
       } else if (tx instanceof Uint8Array) {
@@ -813,6 +819,7 @@ export class JsonRpcProvider extends Provider {
             tx,
           ),
         );
+        throw new Error('TODO: remove');
       }
 
       const resp = await this.client.requestWithType(
@@ -823,6 +830,7 @@ export class JsonRpcProvider extends Provider {
       );
       return resp;
     } catch (err) {
+      console.log(err);
       throw new Error(
         `Error dev inspect transaction with request type: ${err}`,
       );

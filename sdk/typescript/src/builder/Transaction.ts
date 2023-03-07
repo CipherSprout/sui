@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import { is } from 'superstruct';
+import { is, mask } from 'superstruct';
 import { Provider } from '../providers/provider';
 import {
   extractStructTag,
@@ -11,6 +11,7 @@ import {
   SuiObjectRef,
   SUI_TYPE_ARG,
 } from '../types';
+import { builder } from './bcs';
 import {
   Commands,
   CommandArgument,
@@ -136,8 +137,10 @@ export class Transaction {
   setGasBudget(budget: number | bigint) {
     this.#transactionData.gasConfig.budget = String(budget);
   }
-  setGasPayment(payment: SuiObjectRef[]) {
-    this.#transactionData.gasConfig.payment = payment;
+  setGasPayment(payments: SuiObjectRef[]) {
+    this.#transactionData.gasConfig.payment = payments.map((payment) =>
+      mask(payment, SuiObjectRef),
+    );
   }
 
   #transactionData: TransactionDataBuilder;
@@ -218,38 +221,42 @@ export class Transaction {
     provider,
     // TODO: derive the buffer size automatically
     size = 8192,
+    omitGasInfo,
   }: {
     provider?: Provider;
     size?: number;
+    omitGasInfo?: boolean;
   } = {}): Promise<Uint8Array> {
-    if (!this.#transactionData.sender) {
-      throw new Error('Missing transaction sender');
-    }
+    if (!omitGasInfo) {
+      if (!this.#transactionData.sender) {
+        throw new Error('Missing transaction sender');
+      }
 
-    if (!this.#transactionData.gasConfig.budget) {
-      throw new Error('Missing gas budget');
-    }
+      if (!this.#transactionData.gasConfig.budget) {
+        throw new Error('Missing gas budget');
+      }
 
-    if (!this.#transactionData.gasConfig.payment) {
-      const coins = await expectProvider(provider).getCoins(
-        this.#transactionData.sender,
-        SUI_TYPE_ARG,
-        null,
-        null,
-      );
+      if (!this.#transactionData.gasConfig.payment) {
+        const coins = await expectProvider(provider).getCoins(
+          this.#transactionData.sender,
+          SUI_TYPE_ARG,
+          null,
+          null,
+        );
 
-      // TODO: Pick coins better, this is just a temporary hack.
-      this.#transactionData.gasConfig.payment = coins.data.map((coin) => ({
-        objectId: coin.coinObjectId,
-        digest: coin.digest,
-        version: coin.version,
-      }));
-    }
+        // TODO: Pick coins better, this is just a temporary hack.
+        this.#transactionData.gasConfig.payment = coins.data.map((coin) => ({
+          objectId: coin.coinObjectId,
+          digest: coin.digest,
+          version: coin.version,
+        }));
+      }
 
-    if (!this.#transactionData.gasConfig.price) {
-      this.#transactionData.gasConfig.price = String(
-        await expectProvider(provider).getReferenceGasPrice(),
-      );
+      if (!this.#transactionData.gasConfig.price) {
+        this.#transactionData.gasConfig.price = String(
+          await expectProvider(provider).getReferenceGasPrice(),
+        );
+      }
     }
 
     const { inputs, commands } = this.#transactionData;
@@ -426,6 +433,8 @@ export class Transaction {
       });
     }
 
-    return this.#transactionData.build({ size });
+    console.log(this.transactionData);
+
+    return this.#transactionData.build({ size, omitGasInfo });
   }
 }

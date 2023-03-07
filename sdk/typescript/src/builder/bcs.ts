@@ -3,13 +3,10 @@
 
 import { BCS, TypeName } from '@mysten/bcs';
 import { bcs } from '../types/sui-bcs';
-import { normalizeSuiAddress, TypeTag } from '../types';
-import { TypeTagSerializer } from '../signers/txn-data-serializers/type-tag-serializer';
-import { CommandArgument, MoveCallCommand } from './Commands';
 
 export const ARGUMENT_INNER = 'Argument';
 export const VECTOR = 'vector';
-export const OPTION = 'Option;';
+export const OPTION = 'Option<T>';
 export const CALL_ARG = 'CallArg';
 export const TYPE_TAG = 'TypeTag';
 export const OBJECT_ARG = 'ObjectArg';
@@ -24,14 +21,15 @@ export const COMMAND: TypeName = [ENUM_KIND, COMMAND_INNER];
 /** Wrapper around Argument Enum to support `kind` matching in TS */
 export const ARGUMENT: TypeName = [ENUM_KIND, ARGUMENT_INNER];
 
-/** Custom serializer for decoding package, module, function easier */
-export const PROGRAMMABLE_CALL = 'SimpleProgrammableMoveCall';
-
 /** Command types */
 
 export type Option<T> = { some: T } | { none: true };
 
 export const builder = new BCS(bcs)
+  .registerEnumType(OPTION, {
+    None: null,
+    Some: 'T',
+  })
   .registerStructType(PROGRAMMABLE_TX, {
     inputs: [VECTOR, CALL_ARG],
     commands: [VECTOR, COMMAND],
@@ -55,7 +53,7 @@ export const builder = new BCS(bcs)
      * this Command. The results can be used that instant to pass
      * into the next Command.
      */
-    MoveCall: PROGRAMMABLE_CALL,
+    MoveCall: PROGRAMMABLE_CALL_INNER,
     /**
      * Transfer vector of objects to a receiver.
      */
@@ -81,22 +79,10 @@ export const builder = new BCS(bcs)
      * so this call serves a utility function.
      */
     MakeMoveVec: {
-      type: [OPTION, TYPE_TAG],
+      type: ['Option', TYPE_TAG],
       objects: [VECTOR, ARGUMENT],
     },
   });
-
-/**
- * Utilities for better decoding.
- */
-
-type ProgrammableCallInner = {
-  package: string;
-  module: string;
-  function: string;
-  type_arguments: TypeTag[];
-  arguments: CommandArgument[];
-};
 
 /**
  * Wrapper around Enum, which transforms any `T` into an object with `kind` property:
@@ -151,60 +137,5 @@ builder.registerType(
     }
 
     return true;
-  },
-);
-
-/**
- * Custom deserializer for the ProgrammableCall.
- *
- * Hides the inner structure and gives a simpler, more convenient
- * interface to encode and decode this struct as a part of `TransactionData`.
- *
- * - `(package)::(module)::(function)` are now `target` property.
- * - `TypeTag[]` array is now passed as strings, not as a struct.
- */
-builder.registerType(
-  PROGRAMMABLE_CALL,
-  function encodeProgrammableTx(
-    this: BCS,
-    writer,
-    data: MoveCallCommand,
-    typeParams,
-    typeMap,
-  ) {
-    const [pkg, module, fun] = data.target.split('::');
-    const type_arguments = data.typeArguments.map((tag) =>
-      TypeTagSerializer.parseFromStr(tag, true),
-    );
-
-    return this.getTypeInterface(PROGRAMMABLE_CALL_INNER)._encodeRaw.call(
-      this,
-      writer,
-      {
-        package: normalizeSuiAddress(pkg),
-        module,
-        function: fun,
-        type_arguments,
-        arguments: data.arguments,
-      } as ProgrammableCallInner,
-      typeParams,
-      typeMap,
-    );
-  },
-  function decodeProgrammableTx(this: BCS, reader, typeParams, typeMap) {
-    let data: ProgrammableCallInner = builder
-      .getTypeInterface(PROGRAMMABLE_CALL_INNER)
-      ._decodeRaw.call(this, reader, typeParams, typeMap);
-
-    return {
-      target: [data.package, data.module, data.function].join('::'),
-      arguments: data.arguments,
-      typeArguments: data.type_arguments.map(TypeTagSerializer.tagToString),
-    };
-  },
-  // Validation callback to error out if the data format is invalid.
-  // TODO: make sure TypeTag can be parsed.
-  (data: MoveCallCommand) => {
-    return data.target.split('::').length === 3;
   },
 );
