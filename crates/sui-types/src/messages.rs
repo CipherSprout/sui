@@ -381,7 +381,7 @@ impl GenesisObject {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, IntoStaticStr)]
-pub enum SingleTransactionKind {
+pub enum TransactionKind {
     /// A system transaction that will update epoch information on-chain.
     /// It will only ever be executed once in an epoch.
     /// The argument is the next epoch number, which is critical
@@ -398,18 +398,18 @@ pub enum SingleTransactionKind {
     // .. more transaction types go here
 }
 
-impl VersionedProtocolMessage for SingleTransactionKind {
+impl VersionedProtocolMessage for TransactionKind {
     fn check_version_supported(&self, _protocol_config: &ProtocolConfig) -> SuiResult {
         // This code does nothing right now - it exists to cause a compiler error when new
-        // enumerants are added to SingleTransactionKind.
+        // enumerants are added to TransactionKind.
         //
         // When we add new cases here, check that current_protocol_version does not pre-date the
         // addition of that enumerant.
         match &self {
-            SingleTransactionKind::ChangeEpoch(_)
-            | SingleTransactionKind::Genesis(_)
-            | SingleTransactionKind::ConsensusCommitPrologue(_)
-            | SingleTransactionKind::ProgrammableTransaction(_) => Ok(()),
+            TransactionKind::ChangeEpoch(_)
+            | TransactionKind::Genesis(_)
+            | TransactionKind::ConsensusCommitPrologue(_)
+            | TransactionKind::ProgrammableTransaction(_) => Ok(()),
         }
     }
 }
@@ -921,19 +921,19 @@ impl SharedInputObject {
     }
 }
 
-impl SingleTransactionKind {
+impl TransactionKind {
     /// present to make migrations to programmable transactions eaier.
     /// Will be removed
     pub fn programmable(pt: ProgrammableTransaction) -> Self {
-        SingleTransactionKind::ProgrammableTransaction(pt)
+        TransactionKind::ProgrammableTransaction(pt)
     }
 
     pub fn is_system_tx(&self) -> bool {
         matches!(
             self,
-            SingleTransactionKind::ChangeEpoch(_)
-                | SingleTransactionKind::Genesis(_)
-                | SingleTransactionKind::ConsensusCommitPrologue(_)
+            TransactionKind::ChangeEpoch(_)
+                | TransactionKind::Genesis(_)
+                | TransactionKind::ConsensusCommitPrologue(_)
         )
     }
 
@@ -1013,10 +1013,10 @@ impl SingleTransactionKind {
 
     pub fn validity_check(&self, config: &ProtocolConfig) -> UserInputResult {
         match self {
-            SingleTransactionKind::ProgrammableTransaction(p) => p.validity_check(config)?,
-            SingleTransactionKind::ChangeEpoch(_)
-            | SingleTransactionKind::Genesis(_)
-            | SingleTransactionKind::ConsensusCommitPrologue(_) => (),
+            TransactionKind::ProgrammableTransaction(p) => p.validity_check(config)?,
+            TransactionKind::ChangeEpoch(_)
+            | TransactionKind::Genesis(_)
+            | TransactionKind::ConsensusCommitPrologue(_) => (),
         };
         Ok(())
     }
@@ -1024,15 +1024,15 @@ impl SingleTransactionKind {
     /// number of commands, or 1 if it is a system transaction
     pub fn num_commands(&self) -> usize {
         match self {
-            SingleTransactionKind::ChangeEpoch(_)
-            | SingleTransactionKind::Genesis(_)
-            | SingleTransactionKind::ConsensusCommitPrologue(_) => 1,
-            SingleTransactionKind::ProgrammableTransaction(pt) => pt.commands.len(),
+            TransactionKind::ChangeEpoch(_)
+            | TransactionKind::Genesis(_)
+            | TransactionKind::ConsensusCommitPrologue(_) => 1,
+            TransactionKind::ProgrammableTransaction(pt) => pt.commands.len(),
         }
     }
 }
 
-impl Display for SingleTransactionKind {
+impl Display for TransactionKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut writer = String::new();
         match &self {
@@ -1120,7 +1120,7 @@ impl VersionedProtocolMessage for TransactionData {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct TransactionDataV1 {
-    pub kind: SingleTransactionKind,
+    pub kind: TransactionKind,
     pub sender: SuiAddress,
     pub gas_data: GasData,
     pub expiration: TransactionExpiration,
@@ -1128,7 +1128,7 @@ pub struct TransactionDataV1 {
 
 impl TransactionData {
     pub fn new_with_dummy_gas_price(
-        kind: SingleTransactionKind,
+        kind: TransactionKind,
         sender: SuiAddress,
         gas_payment: ObjectRef,
         gas_budget: u64,
@@ -1146,7 +1146,7 @@ impl TransactionData {
         })
     }
 
-    pub fn new_system_transaction(kind: SingleTransactionKind) -> Self {
+    pub fn new_system_transaction(kind: TransactionKind) -> Self {
         // assert transaction kind if a system transaction?
         // assert!(kind.is_system_tx());
         let sender = SuiAddress::default();
@@ -1164,7 +1164,7 @@ impl TransactionData {
     }
 
     pub fn new(
-        kind: SingleTransactionKind,
+        kind: TransactionKind,
         sender: SuiAddress,
         gas_payment: ObjectRef,
         gas_budget: u64,
@@ -1184,7 +1184,7 @@ impl TransactionData {
     }
 
     pub fn new_with_gas_coins(
-        kind: SingleTransactionKind,
+        kind: TransactionKind,
         sender: SuiAddress,
         gas_payment: Vec<ObjectRef>,
         gas_budget: u64,
@@ -1203,11 +1203,7 @@ impl TransactionData {
         })
     }
 
-    pub fn new_with_gas_data(
-        kind: SingleTransactionKind,
-        sender: SuiAddress,
-        gas_data: GasData,
-    ) -> Self {
+    pub fn new_with_gas_data(kind: TransactionKind, sender: SuiAddress, gas_data: GasData) -> Self {
         TransactionData::V1(TransactionDataV1 {
             kind,
             sender,
@@ -1493,11 +1489,11 @@ impl TransactionData {
         gas_budget: u64,
         gas_price: u64,
     ) -> Self {
-        let kind = SingleTransactionKind::ProgrammableTransaction(pt);
+        let kind = TransactionKind::ProgrammableTransaction(pt);
         Self::new_with_gas_coins(kind, sender, gas_payment, gas_budget, gas_price)
     }
 
-    pub fn execution_parts(&self) -> (SingleTransactionKind, SuiAddress, Vec<ObjectRef>) {
+    pub fn execution_parts(&self) -> (TransactionKind, SuiAddress, Vec<ObjectRef>) {
         (
             self.kind().clone(),
             self.sender(),
@@ -1512,13 +1508,13 @@ pub trait TransactionDataAPI {
 
     // Note: this implies that SingleTransactionKind itself must be versioned, so that it can be
     // shared across versions. This will be easy to do since it is already an enum.
-    fn kind(&self) -> &SingleTransactionKind;
+    fn kind(&self) -> &TransactionKind;
 
     // Used by programmable_transaction_builder
-    fn kind_mut(&mut self) -> &mut SingleTransactionKind;
+    fn kind_mut(&mut self) -> &mut TransactionKind;
 
     // kind is moved out of often enough that this is worth it to special case.
-    fn into_kind(self) -> SingleTransactionKind;
+    fn into_kind(self) -> TransactionKind;
 
     /// Transaction signer and Gas owner
     fn signers(&self) -> Vec<SuiAddress>;
@@ -1568,15 +1564,15 @@ impl TransactionDataAPI for TransactionDataV1 {
         self.sender
     }
 
-    fn kind(&self) -> &SingleTransactionKind {
+    fn kind(&self) -> &TransactionKind {
         &self.kind
     }
 
-    fn kind_mut(&mut self) -> &mut SingleTransactionKind {
+    fn kind_mut(&mut self) -> &mut TransactionKind {
         &mut self.kind
     }
 
-    fn into_kind(self) -> SingleTransactionKind {
+    fn into_kind(self) -> TransactionKind {
         self.kind
     }
 
@@ -1658,10 +1654,10 @@ impl TransactionDataAPI for TransactionDataV1 {
             return Ok(());
         }
         let allow_sponsored_tx = match &self.kind {
-            SingleTransactionKind::ProgrammableTransaction(_) => true,
-            SingleTransactionKind::ChangeEpoch(_)
-            | SingleTransactionKind::ConsensusCommitPrologue(_)
-            | SingleTransactionKind::Genesis(_) => false,
+            TransactionKind::ProgrammableTransaction(_) => true,
+            TransactionKind::ChangeEpoch(_)
+            | TransactionKind::ConsensusCommitPrologue(_)
+            | TransactionKind::Genesis(_) => false,
         };
         if allow_sponsored_tx {
             return Ok(());
@@ -1670,7 +1666,7 @@ impl TransactionDataAPI for TransactionDataV1 {
     }
 
     fn is_change_epoch_tx(&self) -> bool {
-        matches!(self.kind, SingleTransactionKind::ChangeEpoch(_))
+        matches!(self.kind, TransactionKind::ChangeEpoch(_))
     }
 
     fn is_system_tx(&self) -> bool {
@@ -1678,7 +1674,7 @@ impl TransactionDataAPI for TransactionDataV1 {
     }
 
     fn is_genesis_tx(&self) -> bool {
-        matches!(self.kind, SingleTransactionKind::Genesis(_))
+        matches!(self.kind, TransactionKind::Genesis(_))
     }
 
     #[cfg(test)]
@@ -1936,13 +1932,13 @@ impl VerifiedTransaction {
             epoch_start_timestamp_ms,
             system_packages,
         }
-        .pipe(SingleTransactionKind::ChangeEpoch)
+        .pipe(TransactionKind::ChangeEpoch)
         .pipe(Self::new_system_transaction)
     }
 
     pub fn new_genesis_transaction(objects: Vec<GenesisObject>) -> Self {
         GenesisTransaction { objects }
-            .pipe(SingleTransactionKind::Genesis)
+            .pipe(TransactionKind::Genesis)
             .pipe(Self::new_system_transaction)
     }
 
@@ -1956,11 +1952,11 @@ impl VerifiedTransaction {
             round,
             commit_timestamp_ms,
         }
-        .pipe(SingleTransactionKind::ConsensusCommitPrologue)
+        .pipe(TransactionKind::ConsensusCommitPrologue)
         .pipe(Self::new_system_transaction)
     }
 
-    fn new_system_transaction(system_transaction: SingleTransactionKind) -> Self {
+    fn new_system_transaction(system_transaction: TransactionKind) -> Self {
         system_transaction
             .pipe(TransactionData::new_system_transaction)
             .pipe(|data| {

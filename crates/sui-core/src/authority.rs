@@ -1055,7 +1055,7 @@ impl AuthorityState {
     pub async fn dev_inspect_transaction(
         &self,
         sender: SuiAddress,
-        transaction_kind: SingleTransactionKind,
+        transaction_kind: TransactionKind,
         gas_price: Option<u64>,
     ) -> Result<DevInspectResults, anyhow::Error> {
         let epoch_store = self.load_epoch_store_one_call_per_task();
