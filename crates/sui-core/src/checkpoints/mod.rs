@@ -449,6 +449,7 @@ pub struct CheckpointSignatureAggregator {
     summary: CheckpointSummary,
     digest: CheckpointDigest,
     signatures: StakeAggregator<AuthoritySignInfo, true>,
+    failures: StakeAggregator<AuthoritySignInfo, false>,
 }
 
 impl CheckpointBuilder {
@@ -1004,9 +1005,8 @@ impl CheckpointAggregator {
                     next_index: 0,
                     digest: summary.digest(),
                     summary,
-                    signatures: StakeAggregator::new(Arc::new(
-                        self.epoch_store.committee().clone(),
-                    )),
+                    signatures: StakeAggregator::new(self.epoch_store.committee().clone()),
+                    failures: StakeAggregator::new(self.epoch_store.committee().clone()),
                 });
                 self.current.as_mut().unwrap()
             };
@@ -1082,6 +1082,15 @@ impl CheckpointSignatureAggregator {
         let author = signature.authority;
         // consensus ensures that authority == narwhal_cert.author
         if their_digest != self.digest {
+            if let InsertResult::QuorumReached(data) =
+                self.failures.insert_generic(author, signature)
+            {
+                panic!("Checkpoint fork detected - f+1 validators submitted checkpoint digest at seq {} different from our digest {}. Validators with different digests: {:?}",
+                       self.summary.sequence_number,
+                       self.digest,
+                        data.keys()
+                );
+            }
             warn!(
                 "Validator {:?} has mismatching checkpoint digest {} at seq {}, we have digest {}",
                 author.concise(),

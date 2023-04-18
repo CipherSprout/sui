@@ -4,6 +4,7 @@
 use jsonrpsee::core::RpcResult;
 use jsonrpsee_proc_macros::rpc;
 
+use sui_json_rpc_types::SuiLoadedChildObjectsResponse;
 use sui_json_rpc_types::{
     Checkpoint, CheckpointId, CheckpointPage, SuiEvent, SuiGetPastObjectRequest,
     SuiObjectDataOptions, SuiObjectResponse, SuiPastObjectResponse, SuiTransactionBlockResponse,
@@ -62,8 +63,8 @@ pub trait ReadApi {
     /// can be retrieved by this API, even if the object and version exists/existed.
     /// The result may vary across nodes depending on their pruning policies.
     /// Return the object information for a specified version
-    #[method(name = "tryGetPastObject")]
-    async fn try_get_past_object(
+    #[method(name = "tryGetPastObject", blocking)]
+    fn try_get_past_object(
         &self,
         /// the ID of the queried object
         object_id: ObjectID,
@@ -85,6 +86,12 @@ pub trait ReadApi {
         /// options for specifying the content to be returned
         options: Option<SuiObjectDataOptions>,
     ) -> RpcResult<Vec<SuiPastObjectResponse>>;
+
+    #[method(name = "getLoadedChildObjects", blocking)]
+    fn get_loaded_child_objects(
+        &self,
+        digest: TransactionDigest,
+    ) -> RpcResult<SuiLoadedChildObjectsResponse>;
 
     /// Return a checkpoint
     #[method(name = "getCheckpoint")]
