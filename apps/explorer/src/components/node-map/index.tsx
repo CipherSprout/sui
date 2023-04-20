@@ -9,6 +9,7 @@ import React, { type ReactNode, useCallback, useMemo } from 'react';
 import { WorldMap } from './WorldMap';
 import { type NodeLocation } from './types';
 
+import { useAppsBackend } from '~/hooks/useAppsBackend';
 import { Card } from '~/ui/Card';
 import { DateFilter, useDateFilterState } from '~/ui/DateFilter';
 import { Heading } from '~/ui/Heading';
@@ -49,27 +50,57 @@ interface Props {
 // NOTE: This component is lazy imported, so it needs to be default exported:
 export default function NodeMap({ minHeight }: Props) {
     const [dateFilter, setDateFilter] = useDateFilterState('D');
+    const request = useAppsBackend();
 
-    const { data, isLoading, isSuccess } = useQuery(
-        ['node-map', dateFilter],
-        async () => {
-            const res = await fetch(
-                `${HOST}/location?${new URLSearchParams({
-                    version: 'v2',
-                    window: DATE_FILTER_TO_WINDOW[dateFilter],
-                })}`,
-                {
-                    method: 'GET',
-                }
-            );
-
-            if (!res.ok) {
-                throw new Error('Failed to fetch node map data');
-            }
-
-            return res.json() as Promise<NodeLocation[]>;
-        }
+    const {
+        data: rawData,
+        isLoading,
+        isSuccess,
+    } = useQuery(['node-map', dateFilter], async () =>
+        request<
+            {
+                city?: {
+                    geoname_id: number;
+                    names: { en: string };
+                };
+                continent: {
+                    code: string;
+                };
+                location: {
+                    latitude: number;
+                    longitude: number;
+                };
+                country: {
+                    iso_code: string;
+                };
+            }[]
+        >('validator-map', { network: 'mainnet' })
     );
+
+    const data = useMemo(() => {
+        const groupedData: Record<string, NodeLocation> = {};
+
+        rawData?.forEach((validator) => {
+            if (!validator) return null;
+
+            const key = `${validator.continent.code}-${
+                validator.country.iso_code
+            }-${validator.city?.geoname_id ?? 'UNKNOWN'}`;
+
+            if (!groupedData[key]) {
+                groupedData[key] = {
+                    count: 0,
+                    city: validator.city?.names.en || '',
+                    region: validator.continent.code,
+                    country: validator.country.iso_code,
+                    location: `${validator.location.latitude},${validator.location.longitude}`,
+                };
+            }
+            groupedData[key].count += 1;
+        });
+
+        return Object.values(groupedData);
+    }, [rawData]);
 
     const { totalCount, countryCount, countryNodes } = useMemo<{
         totalCount: number | null;
