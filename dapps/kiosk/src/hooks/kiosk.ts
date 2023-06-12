@@ -1,7 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useWalletKit } from '@mysten/wallet-kit';
 import { useQuery } from '@tanstack/react-query';
 import {
   TANSTACK_KIOSK_DATA_KEY,
@@ -15,6 +14,7 @@ import {
   KioskData,
   KioskItem,
   KioskListing,
+  KioskOwnerCap,
   fetchKiosk,
   getKioskObject,
   getOwnedKiosks,
@@ -31,26 +31,27 @@ export type KioskFnType = (
  * A helper to get user's kiosks.
  * If the user doesn't have a kiosk, the return is an object with null values.
  */
-export function useOwnedKiosk() {
-  const { currentAccount } = useWalletKit();
+export function useOwnedKiosk(address: SuiAddress | undefined) {
   const provider = useRpc();
 
   return useQuery({
-    queryKey: [TANSTACK_OWNED_KIOSK_KEY, currentAccount?.address],
+    queryKey: [TANSTACK_OWNED_KIOSK_KEY, address],
     refetchOnMount: false,
     retry: false,
     queryFn: async (): Promise<{
+      caps: KioskOwnerCap[];
       kioskId: SuiAddress | null;
       kioskCap: SuiAddress | null;
     } | null> => {
-      if (!currentAccount?.address) return null;
+      if (!address) return null;
 
       const { kioskOwnerCaps, kioskIds } = await getOwnedKiosks(
         provider,
-        currentAccount.address,
+        address,
       );
 
       return {
+        caps: kioskOwnerCaps,
         kioskId: kioskIds[0],
         kioskCap: kioskOwnerCaps[0]?.objectId,
       };

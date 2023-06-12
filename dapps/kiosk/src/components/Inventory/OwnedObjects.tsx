@@ -27,7 +27,7 @@ export function OwnedObjects({ address }: { address: string }) {
   if (isLoading) return <Loading />;
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 pt-12">
       {/* Only shows item with an image_url to make it easier to understand the flows. */}
       {ownedObjects
         ?.filter((x) => !!x.display && !!x.display.image_url)

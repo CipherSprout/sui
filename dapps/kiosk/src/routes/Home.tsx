@@ -15,7 +15,7 @@ function Home() {
     data: ownedKiosk,
     isLoading,
     refetch: refetchOwnedKiosk,
-  } = useOwnedKiosk();
+  } = useOwnedKiosk(currentAccount?.address);
 
   // Return loading state.
   if (isLoading) return <Loading />;

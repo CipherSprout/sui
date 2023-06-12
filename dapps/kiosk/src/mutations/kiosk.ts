@@ -65,7 +65,8 @@ export function usePlaceAndListMutation({
   onSuccess,
   onError,
 }: MutationParams) {
-  const { data: ownedKiosk } = useOwnedKiosk();
+  const { currentAccount } = useWalletKit();
+  const { data: ownedKiosk } = useOwnedKiosk(currentAccount?.address);
   const { signAndExecute } = useTransactionExecution();
 
   return useMutation({
@@ -113,7 +114,8 @@ export function usePlaceAndListMutation({
  * Mutation to place an item in the kiosk.
  */
 export function usePlaceMutation({ onSuccess, onError }: MutationParams) {
-  const { data: ownedKiosk } = useOwnedKiosk();
+  const { currentAccount } = useWalletKit();
+  const { data: ownedKiosk } = useOwnedKiosk(currentAccount?.address);
   const { signAndExecute } = useTransactionExecution();
 
   return useMutation({
@@ -142,7 +144,7 @@ export function usePlaceMutation({ onSuccess, onError }: MutationParams) {
  */
 export function useWithdrawMutation({ onError, onSuccess }: MutationParams) {
   const { currentAccount } = useWalletKit();
-  const { data: ownedKiosk } = useOwnedKiosk();
+  const { data: ownedKiosk } = useOwnedKiosk(currentAccount?.address);
   const { signAndExecute } = useTransactionExecution();
 
   return useMutation({
@@ -175,8 +177,8 @@ export function useWithdrawMutation({ onError, onSuccess }: MutationParams) {
  * Mutation to take an item from the kiosk.
  */
 export function useTakeMutation({ onSuccess, onError }: MutationParams) {
-  const { data: ownedKiosk } = useOwnedKiosk();
   const { currentAccount } = useWalletKit();
+  const { data: ownedKiosk } = useOwnedKiosk(currentAccount?.address);
   const { signAndExecute } = useTransactionExecution();
 
   return useMutation({
@@ -212,8 +214,8 @@ export function useTakeMutation({ onSuccess, onError }: MutationParams) {
  * Mutation to delist an item.
  */
 export function useDelistMutation({ onSuccess, onError }: MutationParams) {
-  const { data: ownedKiosk } = useOwnedKiosk();
   const { currentAccount } = useWalletKit();
+  const { data: ownedKiosk } = useOwnedKiosk(currentAccount?.address);
   const { signAndExecute } = useTransactionExecution();
 
   return useMutation({
@@ -250,8 +252,8 @@ export function usePurchaseItemMutation({
   onSuccess,
   onError,
 }: MutationParams) {
-  const { data: ownedKiosk } = useOwnedKiosk();
   const { currentAccount } = useWalletKit();
+  const { data: ownedKiosk } = useOwnedKiosk(currentAccount?.address);
   const { signAndExecute } = useTransactionExecution();
   const provider = useRpc();
 

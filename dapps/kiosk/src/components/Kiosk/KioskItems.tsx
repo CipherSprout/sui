@@ -10,12 +10,21 @@ import { toast } from 'react-hot-toast';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useKiosk, useOwnedKiosk } from '../../hooks/kiosk';
 import { KioskNotFound } from './KioskNotFound';
+import { useWalletKit } from '@mysten/wallet-kit';
+import { KioskOwnerCap } from '@mysten/kiosk';
 
-export function KioskItems({ kioskId }: { kioskId?: string }) {
+export function KioskItems({
+  caps,
+  kioskId,
+}: {
+  caps?: KioskOwnerCap[];
+  kioskId?: string;
+}) {
   const location = useLocation();
   const isKioskPage = location.pathname.startsWith('/kiosk/');
+  const { currentAccount } = useWalletKit();
 
-  const { data: walletKiosk } = useOwnedKiosk();
+  const { data: walletKiosk } = useOwnedKiosk(currentAccount?.address);
   const ownedKiosk = walletKiosk?.kioskId;
 
   // checks if this is an owned kiosk.
@@ -45,6 +54,8 @@ export function KioskItems({ kioskId }: { kioskId?: string }) {
 
   const kioskItems = kioskData?.items || [];
   const kioskListings = kioskData?.listings || {};
+
+  console.log(caps);
 
   if (isError && isKioskPage) return <KioskNotFound />;
 
