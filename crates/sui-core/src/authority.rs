@@ -112,7 +112,7 @@ use sui_types::{
     SUI_SYSTEM_ADDRESS,
 };
 use sui_types::{is_system_package, TypeTag, SUI_CLOCK_OBJECT_ID};
-use typed_store::Map;
+use typed_store::{Map, TypedStoreError};
 
 use crate::authority::authority_per_epoch_store::{AuthorityPerEpochStore, CertTxGuard};
 use crate::authority::authority_per_epoch_store_pruner::AuthorityPerEpochStorePruner;
@@ -1887,7 +1887,7 @@ impl AuthorityState {
             Some(seq) => self
                 .checkpoint_store
                 .get_checkpoint_by_sequence_number(seq)?,
-            None => self.checkpoint_store.get_latest_certified_checkpoint(),
+            None => self.checkpoint_store.get_latest_certified_checkpoint()?,
         }
         .map(|v| v.into_inner());
         let contents = match &summary {
@@ -2682,7 +2682,8 @@ impl AuthorityState {
         cursor: (String, ObjectID),
         limit: usize,
         one_coin_type_only: bool,
-    ) -> SuiResult<impl Iterator<Item = (String, ObjectID, CoinInfo)> + '_> {
+    ) -> SuiResult<impl Iterator<Item = Result<(String, ObjectID, CoinInfo), TypedStoreError>> + '_>
+    {
         if let Some(indexes) = &self.indexes {
             indexes.get_owned_coins_iterator_with_cursor(owner, cursor, limit, one_coin_type_only)
         } else {
@@ -2696,7 +2697,7 @@ impl AuthorityState {
         // If `Some`, the query will start from the next item after the specified cursor
         cursor: Option<ObjectID>,
         filter: Option<SuiObjectDataFilter>,
-    ) -> SuiResult<impl Iterator<Item = ObjectInfo> + '_> {
+    ) -> SuiResult<impl Iterator<Item = Result<ObjectInfo, TypedStoreError>> + '_> {
         let cursor_u = cursor.unwrap_or(ObjectID::ZERO);
         if let Some(indexes) = &self.indexes {
             indexes.get_owner_objects_iterator(owner, cursor_u, filter)
@@ -2715,12 +2716,12 @@ impl AuthorityState {
     {
         let object_ids = self
             .get_owner_objects_iterator(owner, None, None)?
-            .filter(|o| match &o.type_ {
+            .filter_ok(|o| match &o.type_ {
                 ObjectType::Struct(s) => &type_ == s,
                 ObjectType::Package => false,
             })
-            .map(|info| ObjectKey(info.object_id, info.version))
-            .collect::<Vec<_>>();
+            .map_ok(|info| ObjectKey(info.object_id, info.version))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut move_objects = vec![];
 
         let objects = self.database.multi_get_object_by_key(&object_ids)?;
