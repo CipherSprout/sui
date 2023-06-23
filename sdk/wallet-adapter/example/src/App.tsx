@@ -72,6 +72,14 @@ function App() {
 								  console.log("user rejected signing message");
 								});
 								}
+							console.log(
+						    		"Verify Signed Message:",
+						        	await verifyMessage(
+							        	new TextEncoder().encode("hello world"),
+							        	res.signature,
+							        	3
+						        	)
+          );
 			        }}
 			        >
 			          Sign message
