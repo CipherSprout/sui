@@ -102,9 +102,9 @@ function TransactionBlocksForAddress({
 				{isObject && (
 					<RadioGroup
 						className="flex"
-						ariaLabel="transaction filter"
+						aria-label="transaction filter"
 						value={filterValue}
-						onChange={setFilterValue}
+						onValueChange={(value: string) => setFilterValue(value as FILTER_VALUES)}
 					>
 						{FILTER_OPTIONS.map((filter) => (
 							<RadioOption key={filter.value} value={filter.value} label={filter.label} />

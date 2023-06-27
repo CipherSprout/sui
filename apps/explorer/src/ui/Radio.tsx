@@ -1,41 +1,28 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
-import { RadioGroup as HeadlessRadioGroup } from '@headlessui/react';
-import { type ReactNode } from 'react';
 
-import { type ExtractProps } from '~/ui/types';
+import * as RadioGroupPrimitive from '@radix-ui/react-radio-group';
+import { type ComponentPropsWithoutRef, type ElementRef, forwardRef } from 'react';
 
-export type RadioGroupProps = ExtractProps<typeof HeadlessRadioGroup> & {
-	children: ReactNode;
-	ariaLabel: string;
+const RadioGroup = RadioGroupPrimitive.Root;
+
+export type RadioOptionProps = {
+	label: string;
+	value: string;
+	disabled?: boolean;
 };
 
-export function RadioGroup({ ariaLabel, children, ...props }: RadioGroupProps) {
-	return (
-		<HeadlessRadioGroup {...props}>
-			<HeadlessRadioGroup.Label role="" className="sr-only">
-				{ariaLabel}
-			</HeadlessRadioGroup.Label>
-			{children}
-		</HeadlessRadioGroup>
-	);
-}
+const RadioOption = forwardRef<
+	ElementRef<typeof RadioGroupPrimitive.Item>,
+	ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item> & { label: string }
+>(({ label, ...props }, ref) => (
+	<RadioGroupPrimitive.Item
+		ref={ref}
+		className="flex flex-col rounded-md border border-transparent bg-white px-2 py-1 text-captionSmall font-semibold text-steel-dark hover:text-steel-darker disabled:cursor-default  disabled:text-gray-60  data-[state=checked]:border-steel data-[state=checked]:text-hero-dark"
+		{...props}
+	>
+		{label}
+	</RadioGroupPrimitive.Item>
+));
 
-export type RadioOptionProps = ExtractProps<typeof HeadlessRadioGroup.Option> & {
-	label?: string;
-};
-
-export function RadioOption({ label, children, ...props }: RadioOptionProps) {
-	return (
-		<HeadlessRadioGroup.Option
-			className="flex flex-col rounded-md border border-transparent bg-white text-steel-dark hover:text-steel-darker ui-checked:border-steel  ui-checked:text-hero-dark  ui-disabled:text-gray-60"
-			{...props}
-		>
-			{label && (
-				<HeadlessRadioGroup.Label className="cursor-pointer px-2 py-1 text-captionSmall font-semibold ui-disabled:cursor-default">
-					{label}
-				</HeadlessRadioGroup.Label>
-			)}
-		</HeadlessRadioGroup.Option>
-	);
-}
+export { RadioGroup, RadioOption };

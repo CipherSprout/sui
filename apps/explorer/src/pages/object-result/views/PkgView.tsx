@@ -50,9 +50,9 @@ function PkgView({ data }: { data: DataType }) {
 
 	const checkIsPropertyType = (value: any) => ['number', 'string'].includes(typeof value);
 
-	const properties = Object.entries(viewedData.data?.contents)
-		.filter(([key, _]) => key !== 'name')
-		.filter(([_, value]) => checkIsPropertyType(value));
+	const properties = Object.entries(viewedData.data?.contents).filter(
+		([key, value]) => key !== 'name' && checkIsPropertyType(value),
+	);
 
 	return (
 		<div>
@@ -91,9 +91,9 @@ function PkgView({ data }: { data: DataType }) {
 							<div>
 								<RadioGroup
 									className="hidden gap-0.5 md:flex"
-									ariaLabel="split-panel-bytecode-viewer"
+									aria-label="split-panel-bytecode-viewer"
 									value={selectedSplitPanelOrientation}
-									onChange={setSplitPanelOrientation}
+									onValueChange={(value) => setSplitPanelOrientation(value as Direction)}
 								>
 									{splitPanelsOrientation.map(({ value, label }) => (
 										<RadioOption key={value} value={value} label={label} />

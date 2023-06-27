@@ -185,6 +185,7 @@ export default {
 		aspectRatio: false,
 	},
 	plugins: [
+		require('tailwindcss-animate'),
 		require('@headlessui/tailwindcss'),
 		require('@tailwindcss/aspect-ratio'),
 		require('@tailwindcss/forms')({

@@ -4,7 +4,7 @@
 import { type StoryObj, type Meta } from '@storybook/react';
 import { useState } from 'react';
 
-import { RadioGroup, type RadioGroupProps, RadioOption } from '~/ui/Radio';
+import { RadioGroup, RadioOption } from '~/ui/Radio';
 
 export default {
 	component: RadioGroup,
@@ -12,34 +12,36 @@ export default {
 
 const groups = [
 	{
+		value: '1',
 		label: 'label 1',
 		description: 'description 1',
 	},
 	{
+		value: '2',
 		label: 'label 2',
 		description: 'description 2',
 	},
 	{
+		value: '3',
 		label: 'label 3',
 		description: 'description 3',
 	},
 ];
 
-export const Default: StoryObj<RadioGroupProps> = {
-	render: (props) => {
-		const [selected, setSelected] = useState(groups[0]);
+export const Default: StoryObj = {
+	render: () => {
+		const [selected, setSelected] = useState(groups[0].value);
 
 		return (
 			<div>
 				<RadioGroup
-					{...props}
 					className="flex"
 					value={selected}
-					onChange={setSelected}
-					ariaLabel="Default radio group"
+					onValueChange={setSelected}
+					aria-label="Default radio group"
 				>
 					{groups.map((group) => (
-						<RadioOption key={group.label} value={group} label={group.label} />
+						<RadioOption key={group.label} value={group.value} label={group.label} />
 					))}
 				</RadioGroup>
 			</div>

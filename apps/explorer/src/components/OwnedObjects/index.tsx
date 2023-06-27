@@ -37,9 +37,9 @@ export function OwnedObjects({ id }: { id: string }) {
 		<div className="flex flex-col gap-4 pt-5">
 			<RadioGroup
 				className="flex"
-				ariaLabel="transaction filter"
+				aria-label="transaction filter"
 				value={filter}
-				onChange={setFilter}
+				onValueChange={setFilter}
 			>
 				{FILTER_OPTIONS.map((filter) => (
 					<RadioOption
