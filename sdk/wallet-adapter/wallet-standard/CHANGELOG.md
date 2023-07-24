@@ -1,5 +1,102 @@
 # @mysten/wallet-standard
 
+## 0.5.12
+
+### Patch Changes
+
+- Updated dependencies [34cc7d610]
+  - @mysten/sui.js@0.37.1
+
+## 0.5.11
+
+### Patch Changes
+
+- Updated dependencies [36f2edff3]
+- Updated dependencies [75d1a190d]
+- Updated dependencies [93794f9f2]
+- Updated dependencies [c3a4ec57c]
+- Updated dependencies [a17d3678a]
+- Updated dependencies [2f37537d5]
+- Updated dependencies [00484bcc3]
+  - @mysten/sui.js@0.37.0
+
+## 0.5.10
+
+### Patch Changes
+
+- Updated dependencies [3ea9adb71a]
+- Updated dependencies [1cfb1c9da3]
+- Updated dependencies [1cfb1c9da3]
+- Updated dependencies [fb3bb9118a]
+  - @mysten/sui.js@0.36.0
+
+## 0.5.9
+
+### Patch Changes
+
+- Updated dependencies [09d77325a9]
+  - @mysten/sui.js@0.35.1
+
+## 0.5.8
+
+### Patch Changes
+
+- Updated dependencies [4ea96d909a]
+- Updated dependencies [bcbb178c44]
+- Updated dependencies [470c27af50]
+- Updated dependencies [03828224c9]
+- Updated dependencies [671faefe3c]
+- Updated dependencies [9ce7e051b4]
+- Updated dependencies [9ce7e051b4]
+- Updated dependencies [bb50698551]
+  - @mysten/sui.js@0.35.0
+
+## 0.5.7
+
+### Patch Changes
+
+- Updated dependencies [85719ac933]
+- Updated dependencies [c3d9cc87f3]
+- Updated dependencies [02a6063f82]
+  - @mysten/sui.js@0.34.1
+
+## 0.5.6
+
+### Patch Changes
+
+- Updated dependencies [280821e0ab]
+- Updated dependencies [6a9abe9e38]
+  - @mysten/sui.js@0.34.0
+
+## 0.5.5
+
+### Patch Changes
+
+- 44e76bbd2: Expose mainnet chain.
+- Updated dependencies [7915de531]
+- Updated dependencies [6f9fc94ca]
+- Updated dependencies [605eac8c6]
+- Updated dependencies [262e3dfdd]
+- Updated dependencies [91c63e4f8]
+- Updated dependencies [e61ed2bac]
+- Updated dependencies [5053a8dc8]
+  - @mysten/sui.js@0.33.0
+
+## 0.5.4
+
+### Patch Changes
+
+- b4f0bfc76: Fix type definitions for package exports.
+- Updated dependencies [4ae3cbea3]
+- Updated dependencies [d2755a496]
+- Updated dependencies [f612dac98]
+- Updated dependencies [c219e7470]
+- Updated dependencies [59ae0e7d6]
+- Updated dependencies [c219e7470]
+- Updated dependencies [4e463c691]
+- Updated dependencies [b4f0bfc76]
+  - @mysten/sui.js@0.32.2
+
 ## 0.5.3
 
 ### Patch Changes

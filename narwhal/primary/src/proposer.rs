@@ -1,9 +1,11 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
-use crate::{metrics::PrimaryMetrics, NetworkModel};
+use crate::metrics::PrimaryMetrics;
 use config::{AuthorityIdentifier, Committee, Epoch, WorkerId};
+use consensus::consensus::LeaderSchedule;
 use fastcrypto::hash::Hash as _;
+use mysten_metrics::metered_channel::{Receiver, Sender};
 use mysten_metrics::spawn_logged_monitored_task;
 use std::collections::{BTreeMap, VecDeque};
 use std::{cmp::Ordering, sync::Arc};
@@ -17,7 +19,6 @@ use tokio::{
 use tracing::{debug, enabled, error, info, trace};
 use types::{
     error::{DagError, DagResult},
-    metered_channel::{Receiver, Sender},
     BatchDigest, Certificate, CertificateAPI, Header, HeaderAPI, Round, TimestampMs,
 };
 use types::{now, ConditionalBroadcastReceiver};
@@ -59,8 +60,6 @@ pub struct Proposer {
     /// hasn't proposed anything new since then. If None is provided then the
     /// default value will be used instead.
     header_resend_timeout: Option<Duration>,
-    /// The network model in which the node operates.
-    network_model: NetworkModel,
 
     /// Receiver for shutdown.
     rx_shutdown: ConditionalBroadcastReceiver,
@@ -96,6 +95,9 @@ pub struct Proposer {
 
     /// Metrics handler
     metrics: Arc<PrimaryMetrics>,
+    /// The consensus leader schedule to be used in order to resolve the leader needed for the
+    /// protocol advancement.
+    leader_schedule: LeaderSchedule,
 }
 
 impl Proposer {
@@ -110,7 +112,6 @@ impl Proposer {
         max_header_delay: Duration,
         min_header_delay: Duration,
         header_resend_timeout: Option<Duration>,
-        network_model: NetworkModel,
         rx_shutdown: ConditionalBroadcastReceiver,
         rx_parents: Receiver<(Vec<Certificate>, Round, Epoch)>,
         rx_our_digests: Receiver<OurDigestMessage>,
@@ -118,6 +119,7 @@ impl Proposer {
         tx_narwhal_round_updates: watch::Sender<Round>,
         rx_committed_own_headers: Receiver<(Round, Vec<Round>)>,
         metrics: Arc<PrimaryMetrics>,
+        leader_schedule: LeaderSchedule,
     ) -> JoinHandle<()> {
         let genesis = Certificate::genesis(&committee);
         spawn_logged_monitored_task!(
@@ -130,7 +132,7 @@ impl Proposer {
                     max_header_delay,
                     min_header_delay,
                     header_resend_timeout,
-                    network_model,
+
                     rx_shutdown,
                     rx_parents,
                     rx_our_digests,
@@ -145,6 +147,7 @@ impl Proposer {
                     proposed_headers: BTreeMap::new(),
                     rx_committed_own_headers,
                     metrics,
+                    leader_schedule,
                 }
                 .run()
                 .await;
@@ -271,17 +274,13 @@ impl Proposer {
                 Duration::from_millis(*header.created_at() - digest.timestamp).as_secs_f64();
             total_inclusion_secs += batch_inclusion_secs;
 
-            #[cfg(feature = "benchmark")]
-            {
-                // NOTE: This log entry is used to compute performance.
-                tracing::info!(
+            // NOTE: This log entry is used to compute performance.
+            tracing::debug!(
                     "Batch {:?} from worker {} took {} seconds from creation to be included in a proposed header",
                     digest.digest,
                     digest.worker_id,
                     batch_inclusion_secs
                 );
-            }
-
             self.metrics
                 .proposer_batch_latency
                 .observe(batch_inclusion_secs);
@@ -314,59 +313,52 @@ impl Proposer {
     }
 
     fn max_delay(&self) -> Duration {
-        match self.network_model {
-            // In partial synchrony, if this node is going to be the leader of the next
-            // round, we set a lower max timeout value to increase its chance of committing
-            // the leader.
-            NetworkModel::PartiallySynchronous
-                if self.committee.leader(self.round + 1).id() == self.authority_id =>
-            {
-                self.max_header_delay / 2
-            }
-
-            // Otherwise we keep the default timeout value.
-            _ => self.max_header_delay,
+        // If this node is going to be the leader of the next round, we set a lower max
+        // timeout value to increase its chance of being included in the dag.
+        if self.committee.leader(self.round + 1).id() == self.authority_id {
+            self.max_header_delay / 2
+        } else {
+            self.max_header_delay
         }
     }
 
     fn min_delay(&self) -> Duration {
-        match self.network_model {
-            // In partial synchrony, if this node is going to be the leader of the next
-            // round and there are more than 1 primary in the committee, we use a lower
-            // min delay value to increase the chance of committing the leader.
-            NetworkModel::PartiallySynchronous
-                if self.committee.size() > 1
-                    && self.committee.leader(self.round + 1).id() == self.authority_id =>
-            {
-                Duration::ZERO
-            }
-
-            // Otherwise we keep the default timeout value.
-            _ => self.min_header_delay,
+        // If this node is going to be the leader of the next round and there are more than
+        // 1 primary in the committee, we use a lower min delay value to increase the chance
+        // of committing the leader.
+        if self.committee.size() > 1
+            && self.committee.leader(self.round + 1).id() == self.authority_id
+        {
+            Duration::ZERO
+        } else {
+            self.min_header_delay
         }
     }
 
-    /// Update the last leader certificate. This is only relevant in partial synchrony.
+    /// Update the last leader certificate.
     fn update_leader(&mut self) -> bool {
-        let leader = self.committee.leader(self.round);
+        let leader = self.leader_schedule.leader(self.round);
         self.last_leader = self
             .last_parents
             .iter()
-            .find(|x| x.origin() == leader.id())
+            .find(|x| {
+                if x.origin() == leader.id() {
+                    debug!("Got leader {:?} for round {}", x, self.round);
+                    true
+                } else {
+                    false
+                }
+            })
             .cloned();
-
-        if let Some(leader) = self.last_leader.as_ref() {
-            debug!("Got leader {} for round {}", leader.origin(), self.round);
-        }
 
         self.last_leader.is_some()
     }
 
     /// Check whether if this validator is the leader of the round, or if we have
     /// (i) f+1 votes for the leader, (ii) 2f+1 nodes not voting for the leader,
-    /// (iii) there is no leader to vote for. This is only relevant in partial synchrony.
+    /// (iii) there is no leader to vote for.
     fn enough_votes(&self) -> bool {
-        if self.committee.leader(self.round + 1).id() == self.authority_id {
+        if self.leader_schedule.leader(self.round + 1).id() == self.authority_id {
             return true;
         }
 
@@ -387,31 +379,16 @@ impl Proposer {
         }
 
         let mut enough_votes = votes_for_leader >= self.committee.validity_threshold();
-        if enough_votes {
-            if let Some(leader) = self.last_leader.as_ref() {
-                debug!(
-                    "Got enough support for leader {} at round {}",
-                    leader.origin(),
-                    self.round
-                );
-            }
-        }
         enough_votes |= no_votes >= self.committee.quorum_threshold();
         enough_votes
     }
 
-    /// Whether we can advance the DAG or need to wait for the leader/more votes. This is only relevant in
-    /// partial synchrony. Note that if we timeout, we ignore this check and advance anyway.
+    /// Whether we can advance the DAG or need to wait for the leader/more votes.
+    /// Note that if we timeout, we ignore this check and advance anyway.
     fn ready(&mut self) -> bool {
-        match self.network_model {
-            // In asynchrony we advance immediately.
-            NetworkModel::Asynchronous => true,
-
-            // In partial synchrony, we need to wait for the leader or for enough votes.
-            NetworkModel::PartiallySynchronous => match self.round % 2 {
-                0 => self.update_leader(),
-                _ => self.enough_votes(),
-            },
+        match self.round % 2 {
+            0 => self.update_leader(),
+            _ => self.enough_votes(),
         }
     }
 
@@ -442,19 +419,23 @@ impl Proposer {
             // and one of the following conditions is met:
             // (i) the timer expired (we timed out on the leader or gave up gather votes for the leader),
             // (ii) we have enough digests (header_num_of_batches_threshold) and we are on the happy path (we can vote for
-            // the leader or the leader has enough votes to enable a commit). The latter condition only matters
-            // in partially synchrony. We guarantee that no more than max_header_num_of_batches are included in
+            // the leader or the leader has enough votes to enable a commit).
+            // We guarantee that no more than max_header_num_of_batches are included.
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.digests.len() >= self.header_num_of_batches_threshold;
             let max_delay_timed_out = max_delay_timer.is_elapsed();
             let min_delay_timed_out = min_delay_timer.is_elapsed();
+            let should_create_header = (max_delay_timed_out
+                || ((enough_digests || min_delay_timed_out) && advance))
+                && enough_parents;
 
-            if (max_delay_timed_out || ((enough_digests || min_delay_timed_out) && advance))
-                && enough_parents
-            {
-                if max_delay_timed_out
-                    && matches!(self.network_model, NetworkModel::PartiallySynchronous)
-                {
+            debug!(
+                "Proposer loop starts: round={} enough_parents={} enough_digests={} advance={} max_delay_timed_out={} min_delay_timed_out={} should_create_header={}", 
+                self.round, enough_parents, enough_digests, advance, max_delay_timed_out, min_delay_timed_out, should_create_header
+            );
+
+            if should_create_header {
+                if max_delay_timed_out {
                     // It is expected that this timer expires from time to time. If it expires too often, it
                     // either means some validators are Byzantine or that the network is experiencing periods
                     // of asynchrony. In practice, the latter scenario means we misconfigured the parameter
@@ -465,6 +446,8 @@ impl Proposer {
                 // Advance to the next round.
                 self.round += 1;
                 let _ = self.tx_narwhal_round_updates.send(self.round);
+
+                debug!("Proposer advanced to round {}", self.round);
 
                 // Update the metrics
                 self.metrics.current_round.set(self.round as i64);
@@ -501,6 +484,9 @@ impl Proposer {
                     }
                 }
 
+                // Reset advance flag.
+                advance = false;
+
                 // Reschedule the timer.
                 let timer_start = Instant::now();
                 max_delay_timer
@@ -509,11 +495,18 @@ impl Proposer {
                 min_delay_timer
                     .as_mut()
                     .reset(timer_start + self.min_delay());
+
+                // Recheck condition and reset time out flags.
+                continue;
             }
+
+            debug!("Proposer waiting for update: round={}", self.round);
 
             tokio::select! {
 
                 () = &mut header_repeat_timer => {
+                    debug!("Proposer header_repeat_timer, round={}", self.round);
+
                     // If the round has not advanced within header_resend_timeout then try to
                     // re-process our own header.
                     if let Some(header) = &opt_latest_header {
@@ -530,6 +523,8 @@ impl Proposer {
                 }
 
                 Some((commit_round, commit_headers)) = self.rx_committed_own_headers.recv() => {
+                    debug!("Proposer committed own header, round={}", self.round);
+
                     // Remove committed headers from the list of pending
                     let mut max_committed_round = 0;
                     for round in commit_headers {
@@ -586,6 +581,8 @@ impl Proposer {
                 },
 
                 Some((parents, round, epoch)) = self.rx_parents.recv() => {
+                    debug!("Proposer received parents, round={} parent.round={} num_parents={}", self.round, round, parents.len());
+
                     // If the core already moved to the next epoch we should pull the next
                     // committee as well.
 
@@ -612,18 +609,31 @@ impl Proposer {
                             let _ = self.tx_narwhal_round_updates.send(self.round);
                             self.last_parents = parents;
 
-                            // we re-calculate the timeout to give the opportunity to the node
-                            // to propose earlier if it's a leader for the round
-                            // Reschedule the timer.
+                            // Reset advance flag.
+                            advance = false;
+
+                            // Extend max_delay_timer to properly wait for leader from the
+                            // previous round.
+                            //
+                            // But min_delay_timer should not be extended: the network moves at
+                            // the interval of min_header_delay. Delaying header creation for
+                            // another min_header_delay after receiving parents from a higher
+                            // round and cancelling proposing, makes it very likely that higher
+                            // round parents will be received and header creation will be cancelled
+                            // again. So min_delay_timer is disabled to get the proposer in sync
+                            // with the quorum.
+                            // If the node becomes leader, disabling min_delay_timer to propose as
+                            // soon as possible is the right thing to do as well.
                             let timer_start = Instant::now();
                             max_delay_timer
                                 .as_mut()
                                 .reset(timer_start + self.max_delay());
                             min_delay_timer
                                 .as_mut()
-                                .reset(timer_start + self.min_delay());
+                                .reset(timer_start);
                         },
                         Ordering::Less => {
+                            debug!("Proposer ignoring older parents, round={} parent.round={}", self.round, round);
                             // Ignore parents from older rounds.
                             continue;
                         },
@@ -636,7 +646,18 @@ impl Proposer {
 
                     // Check whether we can advance to the next round. Note that if we timeout,
                     // we ignore this check and advance anyway.
-                    advance = self.ready();
+                    advance = if self.ready() {
+                        if !advance {
+                            debug!(
+                                "Ready to advance from round {}",
+                                self.round,
+                            );
+                        }
+                        true
+                    } else {
+                        false
+                    };
+                    debug!("Proposer advance={} round={}", advance, self.round);
 
                     let round_type = if self.round % 2 == 0 {
                         "even"
@@ -645,13 +666,15 @@ impl Proposer {
                     };
 
                     self.metrics
-                    .proposer_ready_to_advance
-                    .with_label_values(&[&advance.to_string(), round_type])
-                    .inc();
+                        .proposer_ready_to_advance
+                        .with_label_values(&[&advance.to_string(), round_type])
+                        .inc();
                 }
 
                 // Receive digests from our workers.
                 Some(mut message) = self.rx_our_digests.recv() => {
+                    debug!("Proposer received digest, round={}", self.round);
+
                     // Signal back to the worker that the batch is recorded on the
                     // primary, and will be tracked until inclusion. This means that
                     // if the primary does not fail it will attempt to send the digest
@@ -664,9 +687,11 @@ impl Proposer {
 
                 // Check whether any timer expired.
                 () = &mut max_delay_timer, if !max_delay_timed_out => {
+                    debug!("Proposer reached max_delay_timer, round={}", self.round);
                     // Continue to next iteration of the loop.
                 }
                 () = &mut min_delay_timer, if !min_delay_timed_out => {
+                    debug!("Proposer reached min_delay_timer, round={}", self.round);
                     // Continue to next iteration of the loop.
                 }
 

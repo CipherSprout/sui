@@ -25,6 +25,7 @@ module examples::my_hero {
     /// One-Time-Witness for the module.
     struct MY_HERO has drop {}
 
+    #[allow(unused_function)]
     /// In the module initializer we claim the `Publisher` object
     /// to then create a `Display`. The `Display` is initialized with
     /// a set of fields (but can be modified later) and published via
@@ -36,7 +37,7 @@ module examples::my_hero {
         let keys = vector[
             utf8(b"name"),
             utf8(b"link"),
-            utf8(b"img_url"),
+            utf8(b"image_url"),
             utf8(b"description"),
             utf8(b"project_url"),
             utf8(b"creator"),

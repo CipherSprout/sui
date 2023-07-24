@@ -1,24 +1,26 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
 use super::config::{ClusterTestOpt, Env};
 use async_trait::async_trait;
 use clap::*;
 use std::net::SocketAddr;
 use std::path::Path;
-use sui::client_commands::WalletContext;
-use sui::config::{SuiClientConfig, SuiEnv};
-use sui_config::genesis_config::GenesisConfig;
 use sui_config::Config;
-use sui_config::SUI_KEYSTORE_FILENAME;
+use sui_config::{PersistedConfig, SUI_KEYSTORE_FILENAME, SUI_NETWORK_CONFIG};
 use sui_indexer::test_utils::start_test_indexer;
 use sui_indexer::IndexerConfig;
 use sui_keys::keystore::{AccountKeystore, FileBasedKeystore, Keystore};
+use sui_sdk::sui_client_config::{SuiClientConfig, SuiEnv};
+use sui_sdk::wallet_context::WalletContext;
 use sui_swarm::memory::Swarm;
+use sui_swarm_config::genesis_config::GenesisConfig;
+use sui_swarm_config::network_config::NetworkConfig;
 use sui_types::base_types::SuiAddress;
 use sui_types::crypto::KeypairTraits;
 use sui_types::crypto::SuiKeyPair;
 use sui_types::crypto::{get_key_pair, AccountKeyPair};
-use test_utils::network::{TestCluster, TestClusterBuilder};
+use test_cluster::{TestCluster, TestClusterBuilder};
 use tracing::info;
 
 const DEVNET_FAUCET_ADDR: &str = "https://faucet.devnet.sui.io:443";
@@ -163,9 +165,6 @@ impl LocalNewCluster {
 #[async_trait]
 impl Cluster for LocalNewCluster {
     async fn start(options: &ClusterTestOpt) -> Result<Self, anyhow::Error> {
-        // Let the faucet account hold 1000 gas objects on genesis
-        let genesis_config = GenesisConfig::custom_genesis(4, 1, 100);
-
         // TODO: options should contain port instead of address
         let fullnode_port = options.fullnode_address.as_ref().map(|addr| {
             addr.parse::<SocketAddr>()
@@ -178,18 +177,39 @@ impl Cluster for LocalNewCluster {
                 .expect("Unable to parse indexer address")
         });
 
-        let mut cluster_builder = TestClusterBuilder::new()
-            .set_genesis_config(genesis_config)
-            .enable_fullnode_events();
+        let mut cluster_builder = TestClusterBuilder::new().enable_fullnode_events();
 
-        if let Some(epoch_duration_ms) = options.epoch_duration_ms {
-            cluster_builder = cluster_builder.with_epoch_duration_ms(epoch_duration_ms);
+        // Check if we already have a config directory that is passed
+        if let Some(config_dir) = options.config_dir.clone() {
+            assert!(options.epoch_duration_ms.is_none());
+            // Load the config of the Sui authority.
+            let network_config_path = config_dir.join(SUI_NETWORK_CONFIG);
+            let network_config: NetworkConfig = PersistedConfig::read(&network_config_path)
+                .map_err(|err| {
+                    err.context(format!(
+                        "Cannot open Sui network config file at {:?}",
+                        network_config_path
+                    ))
+                })?;
+
+            cluster_builder = cluster_builder.set_network_config(network_config);
+            cluster_builder = cluster_builder.with_config_dir(config_dir);
+        } else {
+            // Let the faucet account hold 1000 gas objects on genesis
+            let genesis_config = GenesisConfig::custom_genesis(1, 100);
+            // Custom genesis should be build here where we add the extra accounts
+            cluster_builder = cluster_builder.set_genesis_config(genesis_config);
+
+            if let Some(epoch_duration_ms) = options.epoch_duration_ms {
+                cluster_builder = cluster_builder.with_epoch_duration_ms(epoch_duration_ms);
+            }
         }
+
         if let Some(rpc_port) = fullnode_port {
-            cluster_builder = cluster_builder.set_fullnode_rpc_port(rpc_port);
+            cluster_builder = cluster_builder.with_fullnode_rpc_port(rpc_port);
         }
 
-        let mut test_cluster = cluster_builder.build().await?;
+        let mut test_cluster = cluster_builder.build().await;
 
         // Use the wealthy account for faucet
         let faucet_key = test_cluster.swarm.config_mut().account_keys.swap_remove(0);
@@ -206,7 +226,7 @@ impl Cluster for LocalNewCluster {
         };
         if options.pg_address.is_some() && indexer_address.is_some() {
             let config = IndexerConfig {
-                db_url: options.pg_address.clone().unwrap(),
+                db_url: Some(options.pg_address.clone().unwrap()),
                 rpc_client_url: fullnode_url.clone(),
                 rpc_server_url: indexer_address.as_ref().unwrap().ip().to_string(),
                 rpc_server_port: indexer_address.as_ref().unwrap().port(),
@@ -318,7 +338,7 @@ pub async fn new_wallet_context_from_cluster(
         wallet_config_path
     );
 
-    WalletContext::new(&wallet_config_path, None)
+    WalletContext::new(&wallet_config_path, None, None)
         .await
         .unwrap_or_else(|e| {
             panic!(

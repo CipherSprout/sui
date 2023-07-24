@@ -6,6 +6,7 @@ use std::{
     borrow::Borrow,
     collections::{btree_map::Iter, BTreeMap, HashMap, VecDeque},
     marker::PhantomData,
+    ops::RangeBounds,
     sync::{Arc, RwLock},
 };
 
@@ -258,7 +259,13 @@ where
         Ok(())
     }
 
-    fn clear(&self) -> Result<(), Self::Error> {
+    fn unsafe_clear(&self) -> Result<(), Self::Error> {
+        let mut locked = self.rows.write().unwrap();
+        locked.clear();
+        Ok(())
+    }
+
+    fn delete_all(&self) -> Result<(), TypedStoreError> {
         let mut locked = self.rows.write().unwrap();
         locked.clear();
         Ok(())
@@ -269,7 +276,7 @@ where
         locked.is_empty()
     }
 
-    fn iter(&'a self) -> Self::Iterator {
+    fn unbounded_iter(&'a self) -> Self::Iterator {
         unimplemented!("umplemented API");
     }
 
@@ -278,6 +285,10 @@ where
         _lower_bound: Option<K>,
         _upper_bound: Option<K>,
     ) -> Self::Iterator {
+        unimplemented!("umplemented API");
+    }
+
+    fn range_iter(&'a self, _range: impl RangeBounds<K>) -> Self::Iterator {
         unimplemented!("umplemented API");
     }
 
@@ -707,7 +718,7 @@ mod test {
         let db: TestDB<i32, String> = TestDB::open();
 
         // Test clear of empty map
-        let _ = db.clear();
+        let _ = db.unsafe_clear();
 
         let keys_vals = (0..101).map(|i| (i, i.to_string()));
         let mut wb = db.batch();
@@ -718,15 +729,15 @@ mod test {
 
         // Check we have multiple entries
         assert!(db.safe_iter().count() > 1);
-        let _ = db.clear();
+        let _ = db.unsafe_clear();
         assert_eq!(db.safe_iter().count(), 0);
         // Clear again to ensure safety when clearing empty map
-        let _ = db.clear();
+        let _ = db.unsafe_clear();
         assert_eq!(db.safe_iter().count(), 0);
         // Clear with one item
         let _ = db.insert(&1, &"e".to_string());
         assert_eq!(db.safe_iter().count(), 1);
-        let _ = db.clear();
+        let _ = db.unsafe_clear();
         assert_eq!(db.safe_iter().count(), 0);
     }
 
@@ -736,7 +747,7 @@ mod test {
 
         // Test empty map is truly empty
         assert!(db.is_empty());
-        let _ = db.clear();
+        let _ = db.unsafe_clear();
         assert!(db.is_empty());
 
         let keys_vals = (0..101).map(|i| (i, i.to_string()));
@@ -751,7 +762,7 @@ mod test {
         assert!(!db.is_empty());
 
         // Clear again to ensure empty works after clearing
-        let _ = db.clear();
+        let _ = db.unsafe_clear();
         assert_eq!(db.safe_iter().count(), 0);
         assert!(db.is_empty());
     }

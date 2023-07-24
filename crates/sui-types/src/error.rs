@@ -5,16 +5,12 @@
 use crate::{
     base_types::*,
     committee::{Committee, EpochId, StakeUnit},
-    messages::{CommandIndex, ExecutionFailureStatus, MoveLocation, MoveLocationOpt},
+    digests::CheckpointContentsDigest,
+    execution_status::CommandArgumentError,
+    messages_checkpoint::CheckpointSequenceNumber,
     object::Owner,
 };
-use move_binary_format::{access::ModuleAccess, errors::VMError};
-use move_binary_format::{errors::Location, file_format::FunctionDefinitionIndex};
-use move_core_types::{
-    resolver::MoveResolver,
-    vm_status::{StatusCode, StatusType},
-};
-pub use move_vm_runtime::move_vm::MoveVM;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug};
@@ -42,6 +38,7 @@ macro_rules! fp_ensure {
     };
 }
 use crate::digests::TransactionEventsDigest;
+use crate::execution_status::{CommandIndex, ExecutionFailureStatus};
 pub(crate) use fp_ensure;
 
 #[macro_export]
@@ -56,6 +53,32 @@ macro_rules! exit_main {
             }
         }
     };
+}
+
+#[macro_export]
+macro_rules! make_invariant_violation {
+    ($($args:expr),* $(,)?) => {{
+        if cfg!(debug_assertions) {
+            panic!($($args),*)
+        }
+        ExecutionError::invariant_violation(format!($($args),*))
+    }}
+}
+
+#[macro_export]
+macro_rules! invariant_violation {
+    ($($args:expr),* $(,)?) => {
+        return Err(make_invariant_violation!($($args),*).into())
+    };
+}
+
+#[macro_export]
+macro_rules! assert_invariant {
+    ($cond:expr, $($args:expr),* $(,)?) => {{
+        if !$cond {
+            invariant_violation!($($args),*)
+        }
+    }};
 }
 
 #[derive(
@@ -183,8 +206,32 @@ pub enum UserInputError {
     )]
     EmptyCommandInput,
 
-    #[error("Feature is not yet supported: {0}")]
+    #[error("Transaction is denied: {}", error)]
+    TransactionDenied { error: String },
+
+    #[error("Feature is not supported: {0}")]
     Unsupported(String),
+
+    #[error("Query transactions with move function input error: {0}")]
+    MoveFunctionInputError(String),
+
+    #[error("Verified checkpoint not found for sequence number: {0}")]
+    VerifiedCheckpointNotFound(CheckpointSequenceNumber),
+
+    #[error("Verified checkpoint not found for digest: {0}")]
+    VerifiedCheckpointDigestNotFound(String),
+
+    #[error("Latest checkpoint sequence number not found")]
+    LatestCheckpointSequenceNumberNotFound,
+
+    #[error("Checkpoint contents not found for digest: {0}")]
+    CheckpointContentsNotFound(CheckpointContentsDigest),
+
+    #[error("Genesis transaction not found")]
+    GenesisTransactionNotFound,
+
+    #[error("Transaction {0} not found")]
+    TransactionCursorNotFound(u64),
 }
 
 #[derive(
@@ -204,6 +251,8 @@ pub enum UserInputError {
 pub enum SuiObjectResponseError {
     #[error("Object {:?} does not exist.", object_id)]
     NotExists { object_id: ObjectID },
+    #[error("Cannot find dynamic field for parent object {:?}.", parent_object_id)]
+    DynamicFieldNotFound { parent_object_id: ObjectID },
     #[error(
         "Object has been deleted object_id: {:?} at version: {:?} in digest {:?}",
         object_id,
@@ -275,6 +324,12 @@ pub enum SuiError {
         signer: AuthorityName,
         conflicting_sig: bool,
     },
+    // TODO: Used for distinguishing between different occurrences of invalid signatures, to allow retries in some cases.
+    #[error(
+        "Signature is not valid, but a retry may result in a valid one: {}",
+        error
+    )]
+    PotentiallyTemporarilyInvalidSignature { error: String },
 
     // Certificate verification and execution
     #[error(
@@ -358,6 +413,8 @@ pub enum SuiError {
     TransactionAlreadyExecuted { digest: TransactionDigest },
     #[error("Object ID did not have the expected type")]
     BadObjectType { error: String },
+    #[error("Fail to retrieve Object layout for {st}")]
+    FailObjectLayout { st: String },
 
     #[error("Execution invariant violated")]
     ExecutionInvariantViolation,
@@ -388,8 +445,8 @@ pub enum SuiError {
     #[error("Authority Error: {error:?}")]
     GenericAuthorityError { error: String },
 
-    #[error("Failed to dispatch event: {error:?}")]
-    EventFailedToDispatch { error: String },
+    #[error("Failed to dispatch subscription: {error:?}")]
+    FailedToDispatchSubscription { error: String },
 
     #[error("Failed to serialize Owner: {error:?}")]
     OwnerFailedToSerialize { error: String },
@@ -497,6 +554,9 @@ pub enum SuiError {
 
     #[error("Failed to perform file operation: {0}")]
     FileIOError(String),
+
+    #[error("Failed to get JWK")]
+    JWKRetrievalError,
 }
 
 #[repr(u64)]
@@ -521,6 +581,7 @@ pub enum VMMemoryLimitExceededSubStatusCode {
     TRANSFER_ID_COUNT_LIMIT_EXCEEDED = 4,
     OBJECT_RUNTIME_CACHE_LIMIT_EXCEEDED = 5,
     OBJECT_RUNTIME_STORE_LIMIT_EXCEEDED = 6,
+    TOTAL_EVENT_SIZE_LIMIT_EXCEEDED = 7,
 }
 
 pub type SuiResult<T = ()> = Result<T, SuiError>;
@@ -638,6 +699,8 @@ impl SuiError {
                 }
             }
 
+            SuiError::PotentiallyTemporarilyInvalidSignature { .. } => (true, true),
+
             // Overload errors
             SuiError::TooManyTransactionsPendingExecution { .. } => (true, true),
             SuiError::TooManyTransactionsPendingOnObject { .. } => (true, true),
@@ -675,6 +738,18 @@ impl SuiError {
                 | SuiError::TooManyTransactionsPendingOnObject { .. }
                 | SuiError::TooManyTransactionsPendingConsensus
         )
+    }
+}
+
+impl Ord for SuiError {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Ord::cmp(self.as_ref(), other.as_ref())
+    }
+}
+
+impl PartialOrd for SuiError {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -757,81 +832,9 @@ impl From<ExecutionErrorKind> for ExecutionError {
     }
 }
 
-pub fn convert_vm_error<S: MoveResolver<Err = SuiError>>(
-    error: VMError,
-    vm: &MoveVM,
-    state_view: &S,
-) -> ExecutionError {
-    let kind = match (error.major_status(), error.sub_status(), error.location()) {
-        (StatusCode::EXECUTED, _, _) => {
-            // If we have an error the status probably shouldn't ever be Executed
-            debug_assert!(false, "VmError shouldn't ever report successful execution");
-            ExecutionFailureStatus::VMInvariantViolation
-        }
-        (StatusCode::ABORTED, None, _) => {
-            debug_assert!(false, "No abort code");
-            // this is a Move VM invariant violation, the code should always be there
-            ExecutionFailureStatus::VMInvariantViolation
-        }
-        (StatusCode::ABORTED, _, Location::Script) => {
-            debug_assert!(false, "Scripts are not used in Sui");
-            // this is a Move VM invariant violation, in the sense that the location
-            // is malformed
-            ExecutionFailureStatus::VMInvariantViolation
-        }
-        (StatusCode::ABORTED, Some(code), Location::Module(id)) => {
-            let offset = error.offsets().first().copied().map(|(f, i)| (f.0, i));
-            debug_assert!(offset.is_some(), "Move should set the location on aborts");
-            let (function, instruction) = offset.unwrap_or((0, 0));
-            let function_name = vm.load_module(id, state_view).ok().map(|module| {
-                let fdef = module.function_def_at(FunctionDefinitionIndex(function));
-                let fhandle = module.function_handle_at(fdef.function);
-                module.identifier_at(fhandle.name).to_string()
-            });
-            ExecutionFailureStatus::MoveAbort(
-                MoveLocation {
-                    module: id.clone(),
-                    function,
-                    instruction,
-                    function_name,
-                },
-                code,
-            )
-        }
-        (StatusCode::OUT_OF_GAS, _, _) => ExecutionFailureStatus::InsufficientGas,
-        (_, _, location) => match error.major_status().status_type() {
-            StatusType::Execution => {
-                debug_assert!(error.major_status() != StatusCode::ABORTED);
-                let location = match location {
-                    Location::Module(id) => {
-                        let offset = error.offsets().first().copied().map(|(f, i)| (f.0, i));
-                        debug_assert!(
-                            offset.is_some(),
-                            "Move should set the location on all execution errors. Error {error}"
-                        );
-                        let (function, instruction) = offset.unwrap_or((0, 0));
-                        let function_name = vm.load_module(id, state_view).ok().map(|module| {
-                            let fdef = module.function_def_at(FunctionDefinitionIndex(function));
-                            let fhandle = module.function_handle_at(fdef.function);
-                            module.identifier_at(fhandle.name).to_string()
-                        });
-                        Some(MoveLocation {
-                            module: id.clone(),
-                            function,
-                            instruction,
-                            function_name,
-                        })
-                    }
-                    _ => None,
-                };
-                ExecutionFailureStatus::MovePrimitiveRuntimeError(MoveLocationOpt(location))
-            }
-            StatusType::Validation
-            | StatusType::Verification
-            | StatusType::Deserialization
-            | StatusType::Unknown => ExecutionFailureStatus::VMVerificationOrDeserializationError,
-            StatusType::InvariantViolation => ExecutionFailureStatus::VMInvariantViolation,
-        },
-    };
-    ExecutionError::new_with_source(kind, error)
+pub fn command_argument_error(e: CommandArgumentError, arg_idx: usize) -> ExecutionError {
+    ExecutionError::from_kind(ExecutionErrorKind::command_argument_error(
+        e,
+        arg_idx as u16,
+    ))
 }

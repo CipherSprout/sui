@@ -6,17 +6,15 @@ use crate::committee::{Committee, EpochId};
 use crate::digests::{
     CheckpointContentsDigest, CheckpointDigest, TransactionEffectsDigest, TransactionEventsDigest,
 };
+use crate::effects::{TransactionEffects, TransactionEvents};
 use crate::error::SuiError;
 use crate::message_envelope::Message;
-use crate::messages::{
-    SenderSignedData, TransactionDataAPI, TransactionEffects, TransactionEvents,
-    VerifiedTransaction,
-};
 use crate::messages_checkpoint::{
     CheckpointContents, CheckpointSequenceNumber, FullCheckpointContents, VerifiedCheckpoint,
     VerifiedCheckpointContents,
 };
 use crate::move_package::MovePackage;
+use crate::transaction::{SenderSignedData, TransactionDataAPI, VerifiedTransaction};
 use crate::{
     base_types::{ObjectID, ObjectRef, SequenceNumber},
     error::SuiResult,
@@ -55,16 +53,70 @@ pub enum DeleteKind {
     Wrap,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+pub enum MarkerKind {
+    /// An object was received at the given version in the transaction and is no longer able
+    /// to be received at that version in subequent transactions.
+    Received,
+    /// A shared object was deleted by the transaction and is no longer able to be accessed or
+    /// used in subsequent transactions.
+    SharedObjectDeleted,
+}
+
+/// DeleteKind together with the old sequence number prior to the deletion, if available.
+/// For normal deletion and wrap, we always will consult the object store to obtain the old sequence number.
+/// For UnwrapThenDelete however, in the old protocol where simplified_unwrap_then_delete is false,
+/// we will consult the object store to obtain the old sequence number, which latter will be put in
+/// modified_at_versions; in the new protocol where simplified_unwrap_then_delete is true,
+/// we will not consult the object store, and hence won't have the old sequence number.
+#[derive(Debug)]
+pub enum DeleteKindWithOldVersion {
+    Normal(SequenceNumber),
+    // This variant will be deprecated when we turn on simplified_unwrap_then_delete.
+    UnwrapThenDeleteDEPRECATED(SequenceNumber),
+    UnwrapThenDelete,
+    Wrap(SequenceNumber),
+}
+
+impl DeleteKindWithOldVersion {
+    pub fn old_version(&self) -> Option<SequenceNumber> {
+        match self {
+            DeleteKindWithOldVersion::Normal(version)
+            | DeleteKindWithOldVersion::UnwrapThenDeleteDEPRECATED(version)
+            | DeleteKindWithOldVersion::Wrap(version) => Some(*version),
+            DeleteKindWithOldVersion::UnwrapThenDelete => None,
+        }
+    }
+
+    pub fn to_delete_kind(&self) -> DeleteKind {
+        match self {
+            DeleteKindWithOldVersion::Normal(_) => DeleteKind::Normal,
+            DeleteKindWithOldVersion::UnwrapThenDeleteDEPRECATED(_)
+            | DeleteKindWithOldVersion::UnwrapThenDelete => DeleteKind::UnwrapThenDelete,
+            DeleteKindWithOldVersion::Wrap(_) => DeleteKind::Wrap,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ObjectChange {
     Write(Object, WriteKind),
-    Delete(SequenceNumber, DeleteKind),
+    // DeleteKind together with the old sequence number prior to the deletion, if available.
+    Delete(DeleteKindWithOldVersion),
 }
+
+pub trait StorageView: Storage + ParentSync + ChildObjectResolver {}
+impl<T: Storage + ParentSync + ChildObjectResolver> StorageView for T {}
 
 /// An abstraction of the (possibly distributed) store for objects. This
 /// API only allows for the retrieval of objects, not any state changes
 pub trait ChildObjectResolver {
-    fn read_child_object(&self, parent: &ObjectID, child: &ObjectID) -> SuiResult<Option<Object>>;
+    fn read_child_object(
+        &self,
+        parent: &ObjectID,
+        child: &ObjectID,
+        child_version_upper_bound: SequenceNumber,
+    ) -> SuiResult<Option<Object>>;
 }
 
 /// An abstraction of the (possibly distributed) store for objects, and (soon) events and transactions
@@ -92,50 +144,6 @@ pub trait BackingPackageStore {
         self.get_package_object(package_id)
             .map(|opt_obj| opt_obj.and_then(|obj| obj.data.try_into_package()))
     }
-    /// Returns Ok(<object for each package id in `package_ids`>) if all package IDs in
-    /// `package_id` were found. If any package in `package_ids` was not found it returns a list
-    /// of any package ids that are unable to be found>).
-    fn get_package_objects<'a>(
-        &self,
-        package_ids: impl IntoIterator<Item = &'a ObjectID>,
-    ) -> SuiResult<PackageFetchResults<Object>> {
-        let package_objects: Vec<Result<Object, ObjectID>> = package_ids
-            .into_iter()
-            .map(|id| match self.get_package_object(id) {
-                Ok(None) => Ok(Err(*id)),
-                Ok(Some(o)) => Ok(Ok(o)),
-                Err(x) => Err(x),
-            })
-            .collect::<SuiResult<_>>()?;
-
-        let (fetched, failed_to_fetch): (Vec<_>, Vec<_>) =
-            package_objects.into_iter().partition_result();
-        if !failed_to_fetch.is_empty() {
-            Ok(Err(failed_to_fetch))
-        } else {
-            Ok(Ok(fetched))
-        }
-    }
-    fn get_packages<'a>(
-        &self,
-        package_ids: impl IntoIterator<Item = &'a ObjectID>,
-    ) -> SuiResult<PackageFetchResults<MovePackage>> {
-        let objects = self.get_package_objects(package_ids)?;
-        Ok(objects.and_then(|objects| {
-            let (packages, failed): (Vec<_>, Vec<_>) = objects
-                .into_iter()
-                .map(|obj| {
-                    let obj_id = obj.id();
-                    obj.data.try_into_package().ok_or(obj_id)
-                })
-                .partition_result();
-            if !failed.is_empty() {
-                Err(failed)
-            } else {
-                Ok(packages)
-            }
-        }))
-    }
 }
 
 impl<S: BackingPackageStore> BackingPackageStore for std::sync::Arc<S> {
@@ -144,16 +152,62 @@ impl<S: BackingPackageStore> BackingPackageStore for std::sync::Arc<S> {
     }
 }
 
-impl<S: BackingPackageStore> BackingPackageStore for &S {
+impl<S: ?Sized + BackingPackageStore> BackingPackageStore for &S {
     fn get_package_object(&self, package_id: &ObjectID) -> SuiResult<Option<Object>> {
         BackingPackageStore::get_package_object(*self, package_id)
     }
 }
 
-impl<S: BackingPackageStore> BackingPackageStore for &mut S {
+impl<S: ?Sized + BackingPackageStore> BackingPackageStore for &mut S {
     fn get_package_object(&self, package_id: &ObjectID) -> SuiResult<Option<Object>> {
         BackingPackageStore::get_package_object(*self, package_id)
     }
+}
+
+/// Returns Ok(<object for each package id in `package_ids`>) if all package IDs in
+/// `package_id` were found. If any package in `package_ids` was not found it returns a list
+/// of any package ids that are unable to be found>).
+pub fn get_package_objects<'a>(
+    store: &impl BackingPackageStore,
+    package_ids: impl IntoIterator<Item = &'a ObjectID>,
+) -> SuiResult<PackageFetchResults<Object>> {
+    let package_objects: Vec<Result<Object, ObjectID>> = package_ids
+        .into_iter()
+        .map(|id| match store.get_package_object(id) {
+            Ok(None) => Ok(Err(*id)),
+            Ok(Some(o)) => Ok(Ok(o)),
+            Err(x) => Err(x),
+        })
+        .collect::<SuiResult<_>>()?;
+
+    let (fetched, failed_to_fetch): (Vec<_>, Vec<_>) =
+        package_objects.into_iter().partition_result();
+    if !failed_to_fetch.is_empty() {
+        Ok(Err(failed_to_fetch))
+    } else {
+        Ok(Ok(fetched))
+    }
+}
+
+pub fn get_packages<'a>(
+    store: &impl BackingPackageStore,
+    package_ids: impl IntoIterator<Item = &'a ObjectID>,
+) -> SuiResult<PackageFetchResults<MovePackage>> {
+    let objects = get_package_objects(store, package_ids)?;
+    Ok(objects.and_then(|objects| {
+        let (packages, failed): (Vec<_>, Vec<_>) = objects
+            .into_iter()
+            .map(|obj| {
+                let obj_id = obj.id();
+                obj.data.try_into_package().ok_or(obj_id)
+            })
+            .partition_result();
+        if !failed.is_empty() {
+            Err(failed)
+        } else {
+            Ok(packages)
+        }
+    }))
 }
 
 pub fn get_module<S: BackingPackageStore>(
@@ -174,7 +228,8 @@ pub fn get_module_by_id<S: BackingPackageStore>(
     store: S,
     id: &ModuleId,
 ) -> anyhow::Result<Option<CompiledModule>, SuiError> {
-    Ok(get_module(store, id)?.map(|bytes| CompiledModule::deserialize(&bytes).unwrap()))
+    Ok(get_module(store, id)?
+        .map(|bytes| CompiledModule::deserialize_with_defaults(&bytes).unwrap()))
 }
 
 pub trait ParentSync {
@@ -200,20 +255,40 @@ impl<S: ParentSync> ParentSync for &mut S {
 }
 
 impl<S: ChildObjectResolver> ChildObjectResolver for std::sync::Arc<S> {
-    fn read_child_object(&self, parent: &ObjectID, child: &ObjectID) -> SuiResult<Option<Object>> {
-        ChildObjectResolver::read_child_object(self.as_ref(), parent, child)
+    fn read_child_object(
+        &self,
+        parent: &ObjectID,
+        child: &ObjectID,
+        child_version_upper_bound: SequenceNumber,
+    ) -> SuiResult<Option<Object>> {
+        ChildObjectResolver::read_child_object(
+            self.as_ref(),
+            parent,
+            child,
+            child_version_upper_bound,
+        )
     }
 }
 
 impl<S: ChildObjectResolver> ChildObjectResolver for &S {
-    fn read_child_object(&self, parent: &ObjectID, child: &ObjectID) -> SuiResult<Option<Object>> {
-        ChildObjectResolver::read_child_object(*self, parent, child)
+    fn read_child_object(
+        &self,
+        parent: &ObjectID,
+        child: &ObjectID,
+        child_version_upper_bound: SequenceNumber,
+    ) -> SuiResult<Option<Object>> {
+        ChildObjectResolver::read_child_object(*self, parent, child, child_version_upper_bound)
     }
 }
 
 impl<S: ChildObjectResolver> ChildObjectResolver for &mut S {
-    fn read_child_object(&self, parent: &ObjectID, child: &ObjectID) -> SuiResult<Option<Object>> {
-        ChildObjectResolver::read_child_object(*self, parent, child)
+    fn read_child_object(
+        &self,
+        parent: &ObjectID,
+        child: &ObjectID,
+        child_version_upper_bound: SequenceNumber,
+    ) -> SuiResult<Option<Object>> {
+        ChildObjectResolver::read_child_object(*self, parent, child, child_version_upper_bound)
     }
 }
 
@@ -233,6 +308,13 @@ pub trait ReadStore {
     fn get_highest_verified_checkpoint(&self) -> Result<VerifiedCheckpoint, Self::Error>;
 
     fn get_highest_synced_checkpoint(&self) -> Result<VerifiedCheckpoint, Self::Error>;
+
+    fn get_lowest_available_checkpoint(&self) -> Result<CheckpointSequenceNumber, Self::Error>;
+
+    fn get_full_checkpoint_contents_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> Result<Option<FullCheckpointContents>, Self::Error>;
 
     fn get_full_checkpoint_contents(
         &self,
@@ -282,6 +364,17 @@ impl<T: ReadStore> ReadStore for &T {
         ReadStore::get_highest_synced_checkpoint(*self)
     }
 
+    fn get_lowest_available_checkpoint(&self) -> Result<CheckpointSequenceNumber, Self::Error> {
+        ReadStore::get_lowest_available_checkpoint(*self)
+    }
+
+    fn get_full_checkpoint_contents_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> Result<Option<FullCheckpointContents>, Self::Error> {
+        ReadStore::get_full_checkpoint_contents_by_sequence_number(*self, sequence_number)
+    }
+
     fn get_full_checkpoint_contents(
         &self,
         digest: &CheckpointContentsDigest,
@@ -316,13 +409,18 @@ impl<T: ReadStore> ReadStore for &T {
 }
 
 pub trait WriteStore: ReadStore {
-    fn insert_checkpoint(&self, checkpoint: VerifiedCheckpoint) -> Result<(), Self::Error>;
+    fn insert_checkpoint(&self, checkpoint: &VerifiedCheckpoint) -> Result<(), Self::Error>;
     fn update_highest_synced_checkpoint(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+    ) -> Result<(), Self::Error>;
+    fn update_highest_verified_checkpoint(
         &self,
         checkpoint: &VerifiedCheckpoint,
     ) -> Result<(), Self::Error>;
     fn insert_checkpoint_contents(
         &self,
+        checkpoint: &VerifiedCheckpoint,
         contents: VerifiedCheckpointContents,
     ) -> Result<(), Self::Error>;
 
@@ -330,7 +428,7 @@ pub trait WriteStore: ReadStore {
 }
 
 impl<T: WriteStore> WriteStore for &T {
-    fn insert_checkpoint(&self, checkpoint: VerifiedCheckpoint) -> Result<(), Self::Error> {
+    fn insert_checkpoint(&self, checkpoint: &VerifiedCheckpoint) -> Result<(), Self::Error> {
         WriteStore::insert_checkpoint(*self, checkpoint)
     }
 
@@ -341,11 +439,19 @@ impl<T: WriteStore> WriteStore for &T {
         WriteStore::update_highest_synced_checkpoint(*self, checkpoint)
     }
 
+    fn update_highest_verified_checkpoint(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+    ) -> Result<(), Self::Error> {
+        WriteStore::update_highest_verified_checkpoint(*self, checkpoint)
+    }
+
     fn insert_checkpoint_contents(
         &self,
+        checkpoint: &VerifiedCheckpoint,
         contents: VerifiedCheckpointContents,
     ) -> Result<(), Self::Error> {
-        WriteStore::insert_checkpoint_contents(*self, contents)
+        WriteStore::insert_checkpoint_contents(*self, checkpoint, contents)
     }
 
     fn insert_committee(&self, new_committee: Committee) -> Result<(), Self::Error> {
@@ -358,6 +464,8 @@ pub struct InMemoryStore {
     highest_verified_checkpoint: Option<(CheckpointSequenceNumber, CheckpointDigest)>,
     highest_synced_checkpoint: Option<(CheckpointSequenceNumber, CheckpointDigest)>,
     checkpoints: HashMap<CheckpointDigest, VerifiedCheckpoint>,
+    full_checkpoint_contents: HashMap<CheckpointSequenceNumber, FullCheckpointContents>,
+    contents_digest_to_sequence_number: HashMap<CheckpointContentsDigest, CheckpointSequenceNumber>,
     sequence_number_to_digest: HashMap<CheckpointSequenceNumber, CheckpointDigest>,
     checkpoint_contents: HashMap<CheckpointContentsDigest, CheckpointContents>,
     transactions: HashMap<TransactionDigest, VerifiedTransaction>,
@@ -365,6 +473,8 @@ pub struct InMemoryStore {
     events: HashMap<TransactionEventsDigest, TransactionEvents>,
 
     epoch_to_committee: Vec<Committee>,
+
+    lowest_checkpoint_number: CheckpointSequenceNumber,
 }
 
 impl InMemoryStore {
@@ -375,8 +485,8 @@ impl InMemoryStore {
         committee: Committee,
     ) {
         self.insert_committee(committee);
-        self.insert_checkpoint(checkpoint.clone());
-        self.insert_checkpoint_contents(contents);
+        self.insert_checkpoint(&checkpoint);
+        self.insert_checkpoint_contents(&checkpoint, contents);
         self.update_highest_synced_checkpoint(&checkpoint);
     }
 
@@ -396,6 +506,13 @@ impl InMemoryStore {
             .and_then(|digest| self.get_checkpoint_by_digest(digest))
     }
 
+    pub fn get_sequence_number_by_contents_digest(
+        &self,
+        digest: &CheckpointContentsDigest,
+    ) -> Option<CheckpointSequenceNumber> {
+        self.contents_digest_to_sequence_number.get(digest).copied()
+    }
+
     pub fn get_highest_verified_checkpoint(&self) -> Option<&VerifiedCheckpoint> {
         self.highest_verified_checkpoint
             .as_ref()
@@ -408,6 +525,17 @@ impl InMemoryStore {
             .and_then(|(_, digest)| self.get_checkpoint_by_digest(digest))
     }
 
+    pub fn get_lowest_available_checkpoint(&self) -> CheckpointSequenceNumber {
+        self.lowest_checkpoint_number
+    }
+
+    pub fn set_lowest_available_checkpoint(
+        &mut self,
+        checkpoint_seq_num: CheckpointSequenceNumber,
+    ) {
+        self.lowest_checkpoint_number = checkpoint_seq_num;
+    }
+
     pub fn get_checkpoint_contents(
         &self,
         digest: &CheckpointContentsDigest,
@@ -415,19 +543,40 @@ impl InMemoryStore {
         self.checkpoint_contents.get(digest)
     }
 
-    pub fn insert_checkpoint_contents(&mut self, contents: VerifiedCheckpointContents) {
+    pub fn insert_checkpoint_contents(
+        &mut self,
+        checkpoint: &VerifiedCheckpoint,
+        contents: VerifiedCheckpointContents,
+    ) {
         for tx in contents.iter() {
             self.transactions
                 .insert(*tx.transaction.digest(), tx.transaction.to_owned());
             self.effects
                 .insert(tx.effects.digest(), tx.effects.to_owned());
         }
-        let contents = contents.into_inner().into_checkpoint_contents();
+        self.contents_digest_to_sequence_number
+            .insert(checkpoint.content_digest, *checkpoint.sequence_number());
+        let contents = contents.into_inner();
+        self.full_checkpoint_contents
+            .insert(*checkpoint.sequence_number(), contents.clone());
+        let contents = contents.into_checkpoint_contents();
         self.checkpoint_contents
             .insert(*contents.digest(), contents);
     }
 
-    pub fn insert_checkpoint(&mut self, checkpoint: VerifiedCheckpoint) {
+    pub fn insert_checkpoint(&mut self, checkpoint: &VerifiedCheckpoint) {
+        self.insert_certified_checkpoint(checkpoint);
+        let digest = *checkpoint.digest();
+        let sequence_number = *checkpoint.sequence_number();
+
+        if Some(sequence_number) > self.highest_verified_checkpoint.map(|x| x.0) {
+            self.highest_verified_checkpoint = Some((sequence_number, digest));
+        }
+    }
+
+    // This function simulates Consensus inserts certified checkpoint into the checkpoint store
+    // without bumping the highest_verified_checkpoint watermark.
+    pub fn insert_certified_checkpoint(&mut self, checkpoint: &VerifiedCheckpoint) {
         let digest = *checkpoint.digest();
         let sequence_number = *checkpoint.sequence_number();
 
@@ -441,22 +590,58 @@ impl InMemoryStore {
             self.insert_committee(committee);
         }
 
-        // Update latest
-        if Some(sequence_number) > self.highest_verified_checkpoint.map(|x| x.0) {
-            self.highest_verified_checkpoint = Some((sequence_number, digest));
-        }
-
-        self.checkpoints.insert(digest, checkpoint);
+        self.checkpoints.insert(digest, checkpoint.clone());
         self.sequence_number_to_digest
             .insert(sequence_number, digest);
+    }
+
+    pub fn delete_checkpoint_content_test_only(
+        &mut self,
+        sequence_number: u64,
+    ) -> anyhow::Result<()> {
+        let contents = self
+            .full_checkpoint_contents
+            .get(&sequence_number)
+            .unwrap()
+            .clone();
+        let contents_digest = *contents.checkpoint_contents().digest();
+        for content in contents.iter() {
+            let effects_digest = content.effects.digest();
+            let tx_digest = content.transaction.digest();
+            self.effects.remove(&effects_digest);
+            self.transactions.remove(tx_digest);
+        }
+        self.checkpoint_contents.remove(&contents_digest);
+        self.full_checkpoint_contents.remove(&sequence_number);
+        self.contents_digest_to_sequence_number
+            .remove(&contents_digest);
+        self.lowest_checkpoint_number = sequence_number + 1;
+        Ok(())
     }
 
     pub fn update_highest_synced_checkpoint(&mut self, checkpoint: &VerifiedCheckpoint) {
         if !self.checkpoints.contains_key(checkpoint.digest()) {
             panic!("store should already contain checkpoint");
         }
-
+        if let Some(highest_synced_checkpoint) = self.highest_synced_checkpoint {
+            if highest_synced_checkpoint.0 >= checkpoint.sequence_number {
+                return;
+            }
+        }
         self.highest_synced_checkpoint =
+            Some((*checkpoint.sequence_number(), *checkpoint.digest()));
+    }
+
+    pub fn update_highest_verified_checkpoint(&mut self, checkpoint: &VerifiedCheckpoint) {
+        if !self.checkpoints.contains_key(checkpoint.digest()) {
+            panic!("store should already contain checkpoint");
+        }
+        if let Some(highest_verified_checkpoint) = self.highest_verified_checkpoint {
+            if highest_verified_checkpoint.0 >= checkpoint.sequence_number {
+                return;
+            }
+        }
+        self.highest_verified_checkpoint =
             Some((*checkpoint.sequence_number(), *checkpoint.digest()));
     }
 
@@ -562,11 +747,36 @@ impl ReadStore for SharedInMemoryStore {
             .pipe(Ok)
     }
 
+    fn get_lowest_available_checkpoint(&self) -> Result<CheckpointSequenceNumber, Self::Error> {
+        Ok(self.inner().get_lowest_available_checkpoint())
+    }
+
+    fn get_full_checkpoint_contents_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> Result<Option<FullCheckpointContents>, Self::Error> {
+        Ok(self
+            .inner()
+            .full_checkpoint_contents
+            .get(&sequence_number)
+            .cloned())
+    }
+
     fn get_full_checkpoint_contents(
         &self,
         digest: &CheckpointContentsDigest,
     ) -> Result<Option<FullCheckpointContents>, Self::Error> {
-        self.inner()
+        // First look to see if we saved the complete contents already.
+        let inner = self.inner();
+        let contents = inner
+            .get_sequence_number_by_contents_digest(digest)
+            .and_then(|seq_num| inner.full_checkpoint_contents.get(&seq_num).cloned());
+        if contents.is_some() {
+            return Ok(contents);
+        }
+
+        // Otherwise gather it from the individual components.
+        inner
             .get_checkpoint_contents(digest)
             .map(|contents| {
                 FullCheckpointContents::from_checkpoint_contents(&self, contents.to_owned())
@@ -612,7 +822,7 @@ impl ReadStore for SharedInMemoryStore {
 }
 
 impl WriteStore for SharedInMemoryStore {
-    fn insert_checkpoint(&self, checkpoint: VerifiedCheckpoint) -> Result<(), Self::Error> {
+    fn insert_checkpoint(&self, checkpoint: &VerifiedCheckpoint) -> Result<(), Self::Error> {
         self.inner_mut().insert_checkpoint(checkpoint);
         Ok(())
     }
@@ -626,17 +836,34 @@ impl WriteStore for SharedInMemoryStore {
         Ok(())
     }
 
+    fn update_highest_verified_checkpoint(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+    ) -> Result<(), Self::Error> {
+        self.inner_mut()
+            .update_highest_verified_checkpoint(checkpoint);
+        Ok(())
+    }
+
     fn insert_checkpoint_contents(
         &self,
+        checkpoint: &VerifiedCheckpoint,
         contents: VerifiedCheckpointContents,
     ) -> Result<(), Self::Error> {
-        self.inner_mut().insert_checkpoint_contents(contents);
+        self.inner_mut()
+            .insert_checkpoint_contents(checkpoint, contents);
         Ok(())
     }
 
     fn insert_committee(&self, new_committee: Committee) -> Result<(), Self::Error> {
         self.inner_mut().insert_committee(new_committee);
         Ok(())
+    }
+}
+
+impl SharedInMemoryStore {
+    pub fn insert_certified_checkpoint(&self, checkpoint: &VerifiedCheckpoint) {
+        self.inner_mut().insert_certified_checkpoint(checkpoint);
     }
 }
 
@@ -650,6 +877,10 @@ impl ObjectKey {
 
     pub fn max_for_id(id: &ObjectID) -> Self {
         Self(*id, VersionNumber::MAX)
+    }
+
+    pub fn min_for_id(id: &ObjectID) -> Self {
+        Self(*id, VersionNumber::MIN)
     }
 }
 
@@ -668,7 +899,7 @@ impl From<&ObjectRef> for ObjectKey {
 /// Fetch the `ObjectKey`s (IDs and versions) for non-shared input objects.  Includes owned,
 /// and immutable objects as well as the gas objects, but not move packages or shared objects.
 pub fn transaction_input_object_keys(tx: &SenderSignedData) -> SuiResult<Vec<ObjectKey>> {
-    use crate::messages::InputObjectKind as I;
+    use crate::transaction::InputObjectKind as I;
     Ok(tx
         .intent_message()
         .value
@@ -771,5 +1002,141 @@ impl Display for DeleteKind {
             DeleteKind::Normal => write!(f, "Normal"),
             DeleteKind::UnwrapThenDelete => write!(f, "UnwrapThenDelete"),
         }
+    }
+}
+
+// This store only keeps last checkpoint in memory which is all we need
+// for archive verification.
+#[derive(Clone, Debug, Default)]
+pub struct SingleCheckpointSharedInMemoryStore(SharedInMemoryStore);
+
+impl SingleCheckpointSharedInMemoryStore {
+    pub fn insert_genesis_state(
+        &mut self,
+        checkpoint: VerifiedCheckpoint,
+        contents: VerifiedCheckpointContents,
+        committee: Committee,
+    ) {
+        let mut locked = self.0 .0.write().unwrap();
+        locked.insert_genesis_state(checkpoint, contents, committee);
+    }
+}
+
+impl ReadStore for SingleCheckpointSharedInMemoryStore {
+    type Error = Infallible;
+
+    fn get_checkpoint_by_digest(
+        &self,
+        digest: &CheckpointDigest,
+    ) -> Result<Option<VerifiedCheckpoint>, Self::Error> {
+        self.0.get_checkpoint_by_digest(digest)
+    }
+
+    fn get_checkpoint_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> Result<Option<VerifiedCheckpoint>, Self::Error> {
+        self.0.get_checkpoint_by_sequence_number(sequence_number)
+    }
+
+    fn get_highest_verified_checkpoint(&self) -> Result<VerifiedCheckpoint, Self::Error> {
+        self.0.get_highest_verified_checkpoint()
+    }
+
+    fn get_highest_synced_checkpoint(&self) -> Result<VerifiedCheckpoint, Self::Error> {
+        self.0.get_highest_synced_checkpoint()
+    }
+
+    fn get_lowest_available_checkpoint(&self) -> Result<CheckpointSequenceNumber, Self::Error> {
+        self.0.get_lowest_available_checkpoint()
+    }
+
+    fn get_full_checkpoint_contents_by_sequence_number(
+        &self,
+        sequence_number: CheckpointSequenceNumber,
+    ) -> Result<Option<FullCheckpointContents>, Self::Error> {
+        self.0
+            .get_full_checkpoint_contents_by_sequence_number(sequence_number)
+    }
+
+    fn get_full_checkpoint_contents(
+        &self,
+        digest: &CheckpointContentsDigest,
+    ) -> Result<Option<FullCheckpointContents>, Self::Error> {
+        self.0.get_full_checkpoint_contents(digest)
+    }
+
+    fn get_committee(&self, epoch: EpochId) -> Result<Option<Arc<Committee>>, Self::Error> {
+        self.0.get_committee(epoch)
+    }
+
+    fn get_transaction_block(
+        &self,
+        digest: &TransactionDigest,
+    ) -> Result<Option<VerifiedTransaction>, Self::Error> {
+        self.0.get_transaction_block(digest)
+    }
+
+    fn get_transaction_effects(
+        &self,
+        digest: &TransactionEffectsDigest,
+    ) -> Result<Option<TransactionEffects>, Self::Error> {
+        self.0.get_transaction_effects(digest)
+    }
+
+    fn get_transaction_events(
+        &self,
+        digest: &TransactionEventsDigest,
+    ) -> Result<Option<TransactionEvents>, Self::Error> {
+        self.0.get_transaction_events(digest)
+    }
+}
+
+impl WriteStore for SingleCheckpointSharedInMemoryStore {
+    fn insert_checkpoint(&self, checkpoint: &VerifiedCheckpoint) -> Result<(), Self::Error> {
+        {
+            let mut locked = self.0 .0.write().unwrap();
+            locked.checkpoints.clear();
+            locked.sequence_number_to_digest.clear();
+        }
+        self.0.insert_checkpoint(checkpoint)?;
+        Ok(())
+    }
+
+    fn update_highest_synced_checkpoint(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+    ) -> Result<(), Self::Error> {
+        self.0.update_highest_synced_checkpoint(checkpoint)?;
+        Ok(())
+    }
+
+    fn update_highest_verified_checkpoint(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+    ) -> Result<(), Self::Error> {
+        self.0.update_highest_verified_checkpoint(checkpoint)?;
+        Ok(())
+    }
+
+    fn insert_checkpoint_contents(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+        contents: VerifiedCheckpointContents,
+    ) -> Result<(), Self::Error> {
+        {
+            let mut locked = self.0 .0.write().unwrap();
+            locked.transactions.clear();
+            locked.effects.clear();
+            locked.contents_digest_to_sequence_number.clear();
+            locked.full_checkpoint_contents.clear();
+            locked.checkpoint_contents.clear();
+        }
+        self.0.insert_checkpoint_contents(checkpoint, contents)?;
+        Ok(())
+    }
+
+    fn insert_committee(&self, new_committee: Committee) -> Result<(), Self::Error> {
+        self.0.insert_committee(new_committee)
     }
 }

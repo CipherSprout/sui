@@ -1,4 +1,14 @@
 packages:
-  - "sdk/**"
-  - "apps/**"
-  - "dapps/sponsored-transactions"
+    - 'sdk/**'
+    - 'apps/**'
+    - 'dapps/**'
+    - '!**/dist/**'
+    - '!sdk/typescript/*/**'
+    - '!sdk/typescript/builder'
+    - '!sdk/typescript/cryptography'
+    - '!sdk/typescript/faucet'
+    - '!sdk/typescript/transactions'
+    - '!sdk/typescript/client'
+    - '!sdk/typescript/verify'
+    - '!sdk/typescript/multisig'
+    - '!sdk/typescript/utils'

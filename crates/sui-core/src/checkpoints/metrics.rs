@@ -1,6 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use mysten_metrics::histogram::Histogram;
 use prometheus::{
     register_int_counter_vec_with_registry, register_int_counter_with_registry,
     register_int_gauge_vec_with_registry, register_int_gauge_with_registry, IntCounter,
@@ -12,14 +13,16 @@ pub struct CheckpointMetrics {
     pub last_certified_checkpoint: IntGauge,
     pub last_constructed_checkpoint: IntGauge,
     pub checkpoint_errors: IntCounter,
-    pub builder_utilization: IntCounter,
-    pub aggregator_utilization: IntCounter,
     pub transactions_included_in_checkpoint: IntCounter,
     pub checkpoint_roots_count: IntCounter,
     pub checkpoint_participation: IntCounterVec,
     pub last_received_checkpoint_signatures: IntGaugeVec,
     pub last_sent_checkpoint_signature: IntGauge,
     pub highest_accumulated_epoch: IntGauge,
+    pub checkpoint_creation_latency_ms: Histogram,
+    pub remote_checkpoint_forks: IntCounter,
+    pub last_created_checkpoint_age_ms: Histogram,
+    pub last_certified_checkpoint_age_ms: Histogram,
 }
 
 impl CheckpointMetrics {
@@ -37,21 +40,19 @@ impl CheckpointMetrics {
                 registry
             )
             .unwrap(),
+            last_created_checkpoint_age_ms: Histogram::new_in_registry(
+                "last_created_checkpoint_age_ms",
+                "Age of the last created checkpoint",
+                registry
+            ),
+            last_certified_checkpoint_age_ms: Histogram::new_in_registry(
+                "last_certified_checkpoint_age_ms",
+                "Age of the last certified checkpoint",
+                registry
+            ),
             checkpoint_errors: register_int_counter_with_registry!(
                 "checkpoint_errors",
                 "Checkpoints errors count",
-                registry
-            )
-            .unwrap(),
-            builder_utilization: register_int_counter_with_registry!(
-                "builder_utilization",
-                "Checkpoints builder task utilization",
-                registry
-            )
-            .unwrap(),
-            aggregator_utilization: register_int_counter_with_registry!(
-                "aggregator_utilization",
-                "Checkpoints aggregator task utilization",
                 registry
             )
             .unwrap(),
@@ -90,6 +91,17 @@ impl CheckpointMetrics {
             highest_accumulated_epoch: register_int_gauge_with_registry!(
                 "highest_accumulated_epoch",
                 "Highest accumulated epoch",
+                registry
+            )
+            .unwrap(),
+            checkpoint_creation_latency_ms: Histogram::new_in_registry(
+                "checkpoint_creation_latency_ms",
+                "Latency from consensus commit timstamp to local checkpoint creation in milliseconds",
+                registry,
+            ),
+            remote_checkpoint_forks: register_int_counter_with_registry!(
+                "remote_checkpoint_forks",
+                "Number of remote checkpoints that forked from local checkpoints",
                 registry
             )
             .unwrap(),

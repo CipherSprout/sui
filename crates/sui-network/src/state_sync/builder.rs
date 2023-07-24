@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anemo::codegen::InboundRequestLayer;
-use anemo_tower::rate_limit;
+use anemo_tower::{inflight_limit, rate_limit};
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
+    time::Duration,
 };
+use sui_archival::reader::ArchiveReaderBalancer;
 use sui_config::p2p::StateSyncConfig;
 use sui_types::{messages_checkpoint::VerifiedCheckpoint, storage::ReadStore};
 use tap::Pipe;
@@ -16,8 +18,9 @@ use tokio::{
 };
 
 use super::{
-    metrics::Metrics, server::Server, Handle, PeerHeights, StateSync, StateSyncEventLoop,
-    StateSyncMessage, StateSyncServer,
+    metrics::Metrics,
+    server::{CheckpointContentsDownloadLimitLayer, Server},
+    Handle, PeerHeights, StateSync, StateSyncEventLoop, StateSyncMessage, StateSyncServer,
 };
 use sui_types::storage::WriteStore;
 
@@ -25,6 +28,7 @@ pub struct Builder<S> {
     store: Option<S>,
     config: Option<StateSyncConfig>,
     metrics: Option<Metrics>,
+    archive_readers: Option<ArchiveReaderBalancer>,
 }
 
 impl Builder<()> {
@@ -34,6 +38,7 @@ impl Builder<()> {
             store: None,
             config: None,
             metrics: None,
+            archive_readers: None,
         }
     }
 }
@@ -44,6 +49,7 @@ impl<S> Builder<S> {
             store: Some(store),
             config: self.config,
             metrics: self.metrics,
+            archive_readers: self.archive_readers,
         }
     }
 
@@ -56,6 +62,11 @@ impl<S> Builder<S> {
         self.metrics = Some(Metrics::enabled(registry));
         self
     }
+
+    pub fn archive_readers(mut self, archive_readers: ArchiveReaderBalancer) -> Self {
+        self.archive_readers = Some(archive_readers);
+        self
+    }
 }
 
 impl<S> Builder<S>
@@ -65,7 +76,7 @@ where
 {
     pub fn build(self) -> (UnstartedStateSync<S>, StateSyncServer<impl StateSync>) {
         let state_sync_config = self.config.clone().unwrap_or_default();
-        let (builder, server) = self.build_internal();
+        let (mut builder, server) = self.build_internal();
         let mut state_sync_server = StateSyncServer::new(server);
 
         // Apply rate limits from configuration as needed.
@@ -93,6 +104,20 @@ where
                 )),
             );
         }
+        if let Some(limit) = state_sync_config.get_checkpoint_contents_inflight_limit {
+            state_sync_server = state_sync_server.add_layer_for_get_checkpoint_contents(
+                InboundRequestLayer::new(inflight_limit::InflightLimitLayer::new(
+                    limit,
+                    inflight_limit::WaitMode::ReturnError,
+                )),
+            );
+        }
+        if let Some(limit) = state_sync_config.get_checkpoint_contents_per_checkpoint_limit {
+            let layer = CheckpointContentsDownloadLimitLayer::new(limit);
+            builder.download_limit_layer = Some(layer.clone());
+            state_sync_server = state_sync_server
+                .add_layer_for_get_checkpoint_contents(InboundRequestLayer::new(layer));
+        }
 
         (builder, state_sync_server)
     }
@@ -102,10 +127,12 @@ where
             store,
             config,
             metrics,
+            archive_readers,
         } = self;
         let store = store.unwrap();
         let config = config.unwrap_or_default();
         let metrics = metrics.unwrap_or_else(Metrics::disabled);
+        let archive_readers = archive_readers.unwrap_or_default();
 
         let (sender, mailbox) = mpsc::channel(config.mailbox_capacity());
         let (checkpoint_event_sender, _receiver) =
@@ -119,6 +146,7 @@ where
             peers: HashMap::new(),
             unprocessed_checkpoints: HashMap::new(),
             sequence_number_to_digest: HashMap::new(),
+            wait_interval_when_no_peer_to_sync_content: Duration::from_secs(10),
         }
         .pipe(RwLock::new)
         .pipe(Arc::new);
@@ -135,9 +163,11 @@ where
                 handle,
                 mailbox,
                 store,
+                download_limit_layer: None,
                 peer_heights,
                 checkpoint_event_sender,
                 metrics,
+                archive_readers,
             },
             server,
         )
@@ -148,10 +178,12 @@ pub struct UnstartedStateSync<S> {
     pub(super) config: StateSyncConfig,
     pub(super) handle: Handle,
     pub(super) mailbox: mpsc::Receiver<StateSyncMessage>,
+    pub(super) download_limit_layer: Option<CheckpointContentsDownloadLimitLayer>,
     pub(super) store: S,
     pub(super) peer_heights: Arc<RwLock<PeerHeights>>,
     pub(super) checkpoint_event_sender: broadcast::Sender<VerifiedCheckpoint>,
     pub(super) metrics: Metrics,
+    pub(super) archive_readers: ArchiveReaderBalancer,
 }
 
 impl<S> UnstartedStateSync<S>
@@ -164,10 +196,12 @@ where
             config,
             handle,
             mailbox,
+            download_limit_layer,
             store,
             peer_heights,
             checkpoint_event_sender,
             metrics,
+            archive_readers,
         } = self;
 
         (
@@ -178,11 +212,14 @@ where
                 tasks: JoinSet::new(),
                 sync_checkpoint_summaries_task: None,
                 sync_checkpoint_contents_task: None,
+                download_limit_layer,
                 store,
                 peer_heights,
                 checkpoint_event_sender,
                 network,
                 metrics,
+                archive_readers,
+                sync_checkpoint_from_archive_task: None,
             },
             handle,
         )

@@ -45,18 +45,46 @@
 use super::SuiNode;
 use std::future::Future;
 use std::sync::Arc;
+use sui_core::authority::AuthorityState;
 
 /// Wrap SuiNode to allow correct access to SuiNode in simulator tests.
-pub struct SuiNodeHandle(Arc<SuiNode>);
+pub struct SuiNodeHandle {
+    node: Option<Arc<SuiNode>>,
+    shutdown_on_drop: bool,
+}
 
 impl SuiNodeHandle {
     pub fn new(node: Arc<SuiNode>) -> Self {
-        Self(node)
+        Self {
+            node: Some(node),
+            shutdown_on_drop: false,
+        }
+    }
+
+    pub fn inner(&self) -> &Arc<SuiNode> {
+        self.node.as_ref().unwrap()
     }
 
     pub fn with<T>(&self, cb: impl FnOnce(&SuiNode) -> T) -> T {
         let _guard = self.guard();
-        cb(&self.0)
+        cb(self.inner())
+    }
+
+    pub fn state(&self) -> Arc<AuthorityState> {
+        self.with(|sui_node| sui_node.state())
+    }
+
+    pub fn shutdown_on_drop(&mut self) {
+        self.shutdown_on_drop = true;
+    }
+}
+
+impl Clone for SuiNodeHandle {
+    fn clone(&self) -> Self {
+        Self {
+            node: self.node.clone(),
+            shutdown_on_drop: false,
+        }
     }
 }
 
@@ -72,14 +100,14 @@ impl SuiNodeHandle {
         F: FnOnce(&'a SuiNode) -> R,
         R: Future<Output = T>,
     {
-        cb(&self.0).await
+        cb(self.inner()).await
     }
 }
 
 #[cfg(msim)]
 impl SuiNodeHandle {
     fn guard(&self) -> sui_simulator::runtime::NodeEnterGuard {
-        self.0.sim_node.enter_node()
+        self.inner().sim_state.sim_node.enter_node()
     }
 
     pub async fn with_async<'a, F, R, T>(&'a self, cb: F) -> T
@@ -87,8 +115,22 @@ impl SuiNodeHandle {
         F: FnOnce(&'a SuiNode) -> R,
         R: Future<Output = T>,
     {
-        let fut = cb(&self.0);
-        self.0.sim_node.await_future_in_node(fut).await
+        let fut = cb(self.node.as_ref().unwrap());
+        self.inner()
+            .sim_state
+            .sim_node
+            .await_future_in_node(fut)
+            .await
+    }
+}
+
+#[cfg(msim)]
+impl Drop for SuiNodeHandle {
+    fn drop(&mut self) {
+        if self.shutdown_on_drop {
+            let node_id = self.inner().sim_state.sim_node.id();
+            sui_simulator::runtime::Handle::try_current().map(|h| h.delete_node(node_id));
+        }
     }
 }
 

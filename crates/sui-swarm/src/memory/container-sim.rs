@@ -42,8 +42,7 @@ impl Container {
         let handle = sui_simulator::runtime::Handle::current();
         let builder = handle.create_node();
 
-        let socket_addr =
-            mysten_network::multiaddr::to_socket_addr(&config.network_address).unwrap();
+        let socket_addr = config.network_address.to_socket_addr().unwrap();
         let ip = match socket_addr {
             SocketAddr::V4(v4) => IpAddr::V4(*v4.ip()),
             _ => panic!("unsupported protocol"),
@@ -61,7 +60,9 @@ impl Container {
                 let startup_sender = startup_sender.clone();
                 async move {
                     let registry_service = mysten_metrics::RegistryService::new(Registry::new());
-                    let server = SuiNode::start(&config, registry_service).await.unwrap();
+                    let server = SuiNode::start(&config, registry_service, None)
+                        .await
+                        .unwrap();
 
                     startup_sender.send(Arc::downgrade(&server)).ok();
 

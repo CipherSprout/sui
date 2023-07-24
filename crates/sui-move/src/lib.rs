@@ -11,8 +11,6 @@ use std::path::PathBuf;
 
 #[cfg(feature = "build")]
 pub mod build;
-#[cfg(feature = "calibrate")]
-mod cost_calib;
 #[cfg(feature = "coverage")]
 pub mod coverage;
 #[cfg(feature = "disassemble")]
@@ -36,8 +34,6 @@ pub enum Command {
     Prove(prove::Prove),
     #[cfg(feature = "unit_test")]
     Test(unit_test::Test),
-    #[cfg(feature = "calibrate")]
-    CalibrateCosts(Calib),
 }
 #[derive(Parser)]
 pub struct Calib {
@@ -73,7 +69,7 @@ pub fn execute_move_command(
                 report_storage_on_error: c.test.report_storage_on_error,
                 check_stackless_vm: c.test.check_stackless_vm,
                 verbose: c.test.verbose_mode,
-
+                ignore_compile_warnings: c.test.ignore_compile_warnings,
                 ..UnitTestingConfig::default_with_bound(None)
             };
             let result = c.execute(package_path, build_config, unit_test_config)?;
@@ -83,11 +79,6 @@ pub fn execute_move_command(
                 std::process::exit(1)
             }
 
-            Ok(())
-        }
-        #[cfg(feature = "calibrate")]
-        Command::CalibrateCosts(c) => {
-            cost_calib::run_calibration(c.runs, c.summarize);
             Ok(())
         }
     }

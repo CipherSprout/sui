@@ -2,7 +2,7 @@
 title: Sui Glossary
 ---
 
-Find terms used in Sui defined below. Where possible, we link to a canonical definition and focus upon Sui’s use of the term.
+Find terms used in Sui defined below.
 
 ### Causal history
 
@@ -72,7 +72,7 @@ For more information, see [Sui Objects](../learn/objects.md).
 
 ### Single-writer objects
 
-Single-writer objects are owned by one address. In Sui, transactions affecting only single-writer objects owned by the same address may proceed with only a verification of the sender’s address, greatly speeding transaction times. We refer to these as *simple transactions*. See [Single-Writer Apps](single-writer-apps.md) for example applications of this simple transaction model.
+Single-writer objects are owned by one address. In Sui, transactions affecting only single-writer objects owned by the same address may proceed with only a verification of the sender’s address, greatly speeding transaction times. These are *simple transactions*. See [Single-Writer Apps](single-writer-apps.md) for example applications of this simple transaction model.
 
 ### Smart contract
 
@@ -96,7 +96,7 @@ For more information, see [Causal order vs total order](sui-compared.md#causal-o
 
 A transaction in Sui is a change to the blockchain. This may be a *simple transaction* affecting only single-writer, single-address objects, such as minting an NFT or transferring an NFT or another token. These transactions may bypass the consensus protocol in Sui.
 
-More *complex transactions* affecting objects that are shared or owned by multiple addresses, such as asset management and other DeFi use cases, go through the [Narwhal and Bullshark](https://github.com/MystenLabs/narwhal) DAG-based mempool and efficient Byzantine Fault Tolerant (BFT) consensus.
+More *complex transactions* affecting objects that are shared or owned by multiple addresses, such as asset management and other DeFi use cases, go through the [Narwhal and Bullshark](https://github.com/MystenLabs/sui/tree/main/narwhal) DAG-based mempool and efficient Byzantine Fault Tolerant (BFT) consensus.
 
 ### Transfer
 

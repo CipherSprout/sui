@@ -18,11 +18,30 @@ pub struct FaucetReceipt {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchFaucetReceipt {
+    pub task: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CoinInfo {
     pub amount: u64,
     pub id: ObjectID,
     pub transfer_tx_digest: TransactionDigest,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchSendStatus {
+    pub status: BatchSendStatusType,
+    pub transferred_gas_objects: Option<FaucetReceipt>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum BatchSendStatusType {
+    INPROGRESS,
+    SUCCEEDED,
+    DISCARDED,
 }
 
 #[async_trait]
@@ -34,10 +53,21 @@ pub trait Faucet {
         recipient: SuiAddress,
         amounts: &[u64],
     ) -> Result<FaucetReceipt, FaucetError>;
+
+    /// Send `Coin<SUI>` of the specified amount to the recipient in a batch request
+    async fn batch_send(
+        &self,
+        id: Uuid,
+        recipient: SuiAddress,
+        amounts: &[u64],
+    ) -> Result<BatchFaucetReceipt, FaucetError>;
+
+    /// Get the status of a batch_send request
+    async fn get_batch_send_status(&self, task_id: Uuid) -> Result<BatchSendStatus, FaucetError>;
 }
 
-pub const DEFAULT_AMOUNT: u64 = 200_000_000;
-pub const DEFAULT_NUM_OF_COINS: usize = 5;
+pub const DEFAULT_AMOUNT: u64 = 1_000_000_000;
+pub const DEFAULT_NUM_OF_COINS: usize = 1;
 
 #[derive(Parser, Clone)]
 #[clap(
@@ -72,6 +102,18 @@ pub struct FaucetConfig {
 
     #[clap(long, default_value_t = 300)]
     pub wal_retry_interval: u64,
+
+    #[clap(long, default_value_t = 10000)]
+    pub max_request_queue_length: u64,
+
+    #[clap(long, default_value_t = 500)]
+    pub batch_request_size: u64,
+
+    #[clap(long, default_value_t = 300)]
+    pub ttl_expiration: u64,
+
+    #[clap(long, default_value_t = false)]
+    pub batch_enabled: bool,
 }
 
 impl Default for FaucetConfig {
@@ -79,13 +121,17 @@ impl Default for FaucetConfig {
         Self {
             port: 5003,
             host_ip: Ipv4Addr::new(127, 0, 0, 1),
-            amount: 200_000_000,
-            num_coins: 5,
+            amount: 1_000_000_000,
+            num_coins: 1,
             request_buffer_size: 10,
             max_request_per_second: 10,
             wallet_client_timeout_secs: 60,
             write_ahead_log: Default::default(),
             wal_retry_interval: 300,
+            max_request_queue_length: 10000,
+            batch_request_size: 500,
+            ttl_expiration: 300,
+            batch_enabled: false,
         }
     }
 }

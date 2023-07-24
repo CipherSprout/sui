@@ -4,7 +4,7 @@
 
 use anyhow::{bail, Result};
 
-use crate::Architecture;
+use move_compiler::editions::{Edition, Flavor};
 use move_core_types::account_address::AccountAddress;
 use move_symbol_pool::symbol::Symbol;
 use std::{
@@ -16,6 +16,7 @@ pub type NamedAddress = Symbol;
 pub type PackageName = Symbol;
 pub type FileName = Symbol;
 pub type PackageDigest = Symbol;
+pub type DepOverride = bool;
 
 pub type AddressDeclarations = BTreeMap<NamedAddress, Option<AccountAddress>>;
 pub type DevAddressDeclarations = BTreeMap<NamedAddress, AccountAddress>;
@@ -39,6 +40,8 @@ pub struct PackageInfo {
     pub version: Version,
     pub authors: Vec<Symbol>,
     pub license: Option<Symbol>,
+    pub edition: Option<Edition>,
+    pub flavor: Option<Flavor>,
     pub custom_properties: BTreeMap<Symbol, String>,
 }
 
@@ -55,6 +58,7 @@ pub struct InternalDependency {
     pub subst: Option<Substitution>,
     pub version: Option<Version>,
     pub digest: Option<PackageDigest>,
+    pub dep_override: DepOverride,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -91,7 +95,6 @@ pub struct CustomDepInfo {
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct BuildInfo {
     pub language_version: Option<Version>,
-    pub architecture: Option<Architecture>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -154,7 +157,7 @@ impl Default for DependencyKind {
 /// or is prefixed by accesses to parent directories when `allow_cwd_parent` is false.
 ///
 /// Returns the normalized path on success.
-fn normalize_path(path: impl AsRef<Path>, allow_cwd_parent: bool) -> Result<PathBuf> {
+pub fn normalize_path(path: impl AsRef<Path>, allow_cwd_parent: bool) -> Result<PathBuf> {
     use Component::*;
 
     let mut stack = Vec::new();

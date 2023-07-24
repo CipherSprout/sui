@@ -33,6 +33,7 @@ of the type at once.
 -  [Constants](#@Constants_0)
 -  [Function `new_request`](#0x2_transfer_policy_new_request)
 -  [Function `new`](#0x2_transfer_policy_new)
+-  [Function `default`](#0x2_transfer_policy_default)
 -  [Function `withdraw`](#0x2_transfer_policy_withdraw)
 -  [Function `destroy_and_withdraw`](#0x2_transfer_policy_destroy_and_withdraw)
 -  [Function `confirm_request`](#0x2_transfer_policy_confirm_request)
@@ -44,6 +45,7 @@ of the type at once.
 -  [Function `remove_rule`](#0x2_transfer_policy_remove_rule)
 -  [Function `uid`](#0x2_transfer_policy_uid)
 -  [Function `uid_mut_as_owner`](#0x2_transfer_policy_uid_mut_as_owner)
+-  [Function `rules`](#0x2_transfer_policy_rules)
 -  [Function `item`](#0x2_transfer_policy_item)
 -  [Function `paid`](#0x2_transfer_policy_paid)
 -  [Function `from`](#0x2_transfer_policy_from)
@@ -58,6 +60,7 @@ of the type at once.
 <b>use</b> <a href="object.md#0x2_object">0x2::object</a>;
 <b>use</b> <a href="package.md#0x2_package">0x2::package</a>;
 <b>use</b> <a href="sui.md#0x2_sui">0x2::sui</a>;
+<b>use</b> <a href="transfer.md#0x2_transfer">0x2::transfer</a>;
 <b>use</b> <a href="tx_context.md#0x2_tx_context">0x2::tx_context</a>;
 <b>use</b> <a href="vec_set.md#0x2_vec_set">0x2::vec_set</a>;
 </code></pre>
@@ -357,10 +360,10 @@ the transaction will fail.
 
 ## Function `new`
 
-Register a type in the Kiosk system and receive an <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicyCap">TransferPolicyCap</a></code>
-which is required to confirm kiosk deals for the <code>T</code>. If there's no
-<code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicyCap">TransferPolicyCap</a></code> available for use, the type can not be traded in
-kiosks.
+Register a type in the Kiosk system and receive a <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">TransferPolicy</a></code> and
+a <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicyCap">TransferPolicyCap</a></code> for the type. The <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">TransferPolicy</a></code> is required to
+confirm kiosk deals for the <code>T</code>. If there's no <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">TransferPolicy</a></code>
+available for use, the type can not be traded in kiosks.
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="transfer_policy.md#0x2_transfer_policy_new">new</a>&lt;T&gt;(pub: &<a href="package.md#0x2_package_Publisher">package::Publisher</a>, ctx: &<b>mut</b> <a href="tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>): (<a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">transfer_policy::TransferPolicy</a>&lt;T&gt;, <a href="transfer_policy.md#0x2_transfer_policy_TransferPolicyCap">transfer_policy::TransferPolicyCap</a>&lt;T&gt;)
@@ -385,6 +388,35 @@ kiosks.
         <a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">TransferPolicy</a> { id, rules: <a href="vec_set.md#0x2_vec_set_empty">vec_set::empty</a>(), <a href="balance.md#0x2_balance">balance</a>: <a href="balance.md#0x2_balance_zero">balance::zero</a>() },
         <a href="transfer_policy.md#0x2_transfer_policy_TransferPolicyCap">TransferPolicyCap</a> { id: <a href="object.md#0x2_object_new">object::new</a>(ctx), policy_id }
     )
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x2_transfer_policy_default"></a>
+
+## Function `default`
+
+Initialize the Tranfer Policy in the default scenario: Create and share
+the <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">TransferPolicy</a></code>, transfer <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicyCap">TransferPolicyCap</a></code> to the transaction
+sender.
+
+
+<pre><code>entry <b>fun</b> <a href="transfer_policy.md#0x2_transfer_policy_default">default</a>&lt;T&gt;(pub: &<a href="package.md#0x2_package_Publisher">package::Publisher</a>, ctx: &<b>mut</b> <a href="tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code>entry <b>fun</b> <a href="transfer_policy.md#0x2_transfer_policy_default">default</a>&lt;T&gt;(pub: &Publisher, ctx: &<b>mut</b> TxContext) {
+    <b>let</b> (policy, cap) = <a href="transfer_policy.md#0x2_transfer_policy_new">new</a>&lt;T&gt;(pub, ctx);
+    sui::transfer::share_object(policy);
+    sui::transfer::transfer(cap, sender(ctx));
 }
 </code></pre>
 
@@ -679,6 +711,7 @@ Remove the Rule from the <code><a href="transfer_policy.md#0x2_transfer_policy_T
 ) {
     <b>assert</b>!(<a href="object.md#0x2_object_id">object::id</a>(policy) == cap.policy_id, <a href="transfer_policy.md#0x2_transfer_policy_ENotOwner">ENotOwner</a>);
     <b>let</b> _: Config = df::remove(&<b>mut</b> policy.id, <a href="transfer_policy.md#0x2_transfer_policy_RuleKey">RuleKey</a>&lt;Rule&gt; {});
+    <a href="vec_set.md#0x2_vec_set_remove">vec_set::remove</a>(&<b>mut</b> policy.rules, &<a href="_get">type_name::get</a>&lt;Rule&gt;());
 }
 </code></pre>
 
@@ -731,6 +764,31 @@ to the <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">Tra
 ): &<b>mut</b> UID {
     <b>assert</b>!(<a href="object.md#0x2_object_id">object::id</a>(self) == cap.policy_id, <a href="transfer_policy.md#0x2_transfer_policy_ENotOwner">ENotOwner</a>);
     &<b>mut</b> self.id
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x2_transfer_policy_rules"></a>
+
+## Function `rules`
+
+Read the <code>rules</code> field from the <code><a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">TransferPolicy</a></code>.
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="transfer_policy.md#0x2_transfer_policy_rules">rules</a>&lt;T&gt;(self: &<a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">transfer_policy::TransferPolicy</a>&lt;T&gt;): &<a href="vec_set.md#0x2_vec_set_VecSet">vec_set::VecSet</a>&lt;<a href="_TypeName">type_name::TypeName</a>&gt;
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="transfer_policy.md#0x2_transfer_policy_rules">rules</a>&lt;T&gt;(self: &<a href="transfer_policy.md#0x2_transfer_policy_TransferPolicy">TransferPolicy</a>&lt;T&gt;): &VecSet&lt;TypeName&gt; {
+    &self.rules
 }
 </code></pre>
 

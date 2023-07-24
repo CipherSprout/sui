@@ -14,9 +14,10 @@ use std::time::Duration;
 use sui_types::base_types::{AuthorityName, ObjectRef, TransactionDigest};
 use sui_types::committee::{Committee, EpochId, StakeUnit};
 use sui_types::quorum_driver_types::{
-    QuorumDriverEffectsQueueResult, QuorumDriverError, QuorumDriverResult,
+    QuorumDriverEffectsQueueResult, QuorumDriverError, QuorumDriverResponse, QuorumDriverResult,
 };
 use tap::TapFallible;
+use tokio::sync::Semaphore;
 use tokio::time::{sleep_until, Instant};
 
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -30,26 +31,25 @@ use crate::authority_aggregator::{
 };
 use crate::authority_client::AuthorityAPI;
 use mysten_common::sync::notify_read::{NotifyRead, Registration};
-use mysten_metrics::spawn_monitored_task;
+use mysten_metrics::{spawn_monitored_task, GaugeGuard};
 use std::fmt::Write;
 use sui_types::error::{SuiError, SuiResult};
-use sui_types::messages::{
-    PlainTransactionInfoResponse, QuorumDriverResponse, VerifiedCertificate, VerifiedTransaction,
-};
+use sui_types::messages_safe_client::PlainTransactionInfoResponse;
+use sui_types::transaction::{CertifiedTransaction, Transaction};
 
 use self::reconfig_observer::ReconfigObserver;
 
 #[cfg(test)]
 mod tests;
 
-const TASK_QUEUE_SIZE: usize = 10000;
+const TASK_QUEUE_SIZE: usize = 2000;
 const EFFECTS_QUEUE_SIZE: usize = 10000;
 const TX_MAX_RETRY_TIMES: u8 = 10;
 
 #[derive(Clone)]
 pub struct QuorumDriverTask {
-    pub transaction: VerifiedTransaction,
-    pub tx_cert: Option<VerifiedCertificate>,
+    pub transaction: Transaction,
+    pub tx_cert: Option<CertifiedTransaction>,
     pub retry_times: u8,
     pub next_retry_after: Instant,
 }
@@ -65,7 +65,7 @@ impl Debug for QuorumDriverTask {
     }
 }
 
-pub struct QuorumDriver<A> {
+pub struct QuorumDriver<A: Clone> {
     validators: ArcSwap<AuthorityAggregator<A>>,
     task_sender: Sender<QuorumDriverTask>,
     effects_subscribe_sender: tokio::sync::broadcast::Sender<QuorumDriverEffectsQueueResult>,
@@ -74,7 +74,7 @@ pub struct QuorumDriver<A> {
     max_retry_times: u8,
 }
 
-impl<A> QuorumDriver<A> {
+impl<A: Clone> QuorumDriver<A> {
     pub(crate) fn new(
         validators: ArcSwap<AuthorityAggregator<A>>,
         task_sender: Sender<QuorumDriverTask>,
@@ -97,7 +97,7 @@ impl<A> QuorumDriver<A> {
         &self.validators
     }
 
-    pub fn clone_committee(&self) -> Committee {
+    pub fn clone_committee(&self) -> Arc<Committee> {
         self.validators.load().committee.clone()
     }
 
@@ -125,8 +125,8 @@ impl<A> QuorumDriver<A> {
     /// Enqueuing happens only after the `next_retry_after`, if not, wait until that instant
     async fn enqueue_again_maybe(
         &self,
-        transaction: VerifiedTransaction,
-        tx_cert: Option<VerifiedCertificate>,
+        transaction: Transaction,
+        tx_cert: Option<CertifiedTransaction>,
         old_retry_times: u8,
     ) -> SuiResult<()> {
         if old_retry_times >= self.max_retry_times {
@@ -166,7 +166,7 @@ impl<A> QuorumDriver<A> {
 
     pub fn notify(
         &self,
-        transaction: &VerifiedTransaction,
+        transaction: &Transaction,
         response: &QuorumDriverResult,
         total_attempts: u8,
     ) {
@@ -203,7 +203,7 @@ where
 {
     pub async fn submit_transaction(
         &self,
-        transaction: VerifiedTransaction,
+        transaction: Transaction,
     ) -> SuiResult<Registration<TransactionDigest, QuorumDriverResult>> {
         let tx_digest = transaction.digest();
         debug!(?tx_digest, "Received transaction execution request.");
@@ -222,10 +222,7 @@ where
 
     // Used when the it is called in a component holding the notifier, and a ticket is
     // already obtained prior to calling this function, for instance, TransactionOrchestrator
-    pub async fn submit_transaction_no_ticket(
-        &self,
-        transaction: VerifiedTransaction,
-    ) -> SuiResult<()> {
+    pub async fn submit_transaction_no_ticket(&self, transaction: Transaction) -> SuiResult<()> {
         let tx_digest = transaction.digest();
         debug!(
             ?tx_digest,
@@ -244,12 +241,12 @@ where
 
     pub(crate) async fn process_transaction(
         &self,
-        transaction: VerifiedTransaction,
+        transaction: Transaction,
     ) -> Result<ProcessTransactionResult, Option<QuorumDriverError>> {
+        let auth_agg = self.validators.load();
+        let _tx_guard = GaugeGuard::acquire(&auth_agg.metrics.inflight_transactions);
         let tx_digest = *transaction.digest();
-        let result = self
-            .validators
-            .load()
+        let result = auth_agg
             .process_transaction(transaction)
             .instrument(tracing::debug_span!("aggregator_process_tx", ?tx_digest))
             .await;
@@ -291,7 +288,7 @@ where
                     // the original transaction + retryable stake. Will continue to retry the original transaction.
                     debug!(
                         ?errors,
-                        "Observed Tx {tx_digest:} is still in retryable state. Conflicting Txes: {conflicting_tx_digests:?}", 
+                        "Observed Tx {tx_digest:} is still in retryable state. Conflicting Txes: {conflicting_tx_digests:?}",
                     );
                     Err(None)
                 }
@@ -364,24 +361,21 @@ where
             Err(err) => {
                 debug!(
                     ?tx_digest,
-                    "Encountered error while attemptting conflicting transaction: {:?}", err
+                    ?conflicting_tx_digest,
+                    "Encountered error while attempting conflicting transaction: {:?}",
+                    err
                 );
-                let err = Err(Some(QuorumDriverError::ObjectsDoubleUsed {
+                Err(Some(QuorumDriverError::ObjectsDoubleUsed {
                     conflicting_txes: conflicting_tx_digests,
                     retried_tx: None,
                     retried_tx_success: None,
-                }));
-                debug!(
-                    ?tx_digest,
-                    "Non retryable error when getting original tx cert: {err:?}"
-                );
-                err
+                }))
             }
             Ok(success) => {
                 debug!(
                     ?tx_digest,
                     ?conflicting_tx_digest,
-                    "Retried conflicting transaction success: {}",
+                    "Retried conflicting transaction. Success: {}",
                     success
                 );
                 if success {
@@ -400,13 +394,13 @@ where
 
     pub(crate) async fn process_certificate(
         &self,
-        certificate: VerifiedCertificate,
+        certificate: CertifiedTransaction,
     ) -> Result<QuorumDriverResponse, Option<QuorumDriverError>> {
+        let auth_agg = self.validators.load();
+        let _cert_guard = GaugeGuard::acquire(&auth_agg.metrics.inflight_certificates);
         let tx_digest = *certificate.digest();
-        let (effects, events) = self
-            .validators
-            .load()
-            .process_certificate(certificate.clone().into_inner())
+        let (effects, events, objects) = auth_agg
+            .process_certificate(certificate.clone())
             .instrument(tracing::debug_span!("aggregator_process_cert", ?tx_digest))
             .await
             .map_err(|agg_err| match agg_err {
@@ -433,6 +427,7 @@ where
         let response = QuorumDriverResponse {
             effects_cert: effects,
             events,
+            objects,
         };
 
         Ok(response)
@@ -466,7 +461,7 @@ where
 
         // If we are able to get a certificate right away, we use it and execute the cert;
         // otherwise, we have to re-form a cert and execute it.
-        let verified_transaction = match response {
+        let transaction = match response {
             PlainTransactionInfoResponse::ExecutedWithCert(cert, _, _) => {
                 self.metrics
                     .total_times_conflicting_transaction_already_finalized_when_retrying
@@ -476,7 +471,7 @@ where
                 let result = self
                     .validators
                     .load()
-                    .process_certificate(cert.into_inner())
+                    .process_certificate(cert)
                     .await
                     .tap_ok(|_resp| {
                         debug!(
@@ -497,7 +492,8 @@ where
                 return Ok(result.is_ok());
             }
             PlainTransactionInfoResponse::Signed(signed) => {
-                signed.verify(&self.clone_committee())?.into_unsigned()
+                signed.verify_committee_sigs_only(&self.clone_committee())?;
+                signed.into_unsigned()
             }
             PlainTransactionInfoResponse::ExecutedWithoutCert(transaction, _, _) => transaction,
         };
@@ -505,7 +501,7 @@ where
         let result = self
             .validators
             .load()
-            .execute_transaction_block(&verified_transaction)
+            .execute_transaction_block(&transaction)
             .await
             .tap_ok(|_resp| {
                 debug!(
@@ -527,7 +523,7 @@ where
     }
 }
 
-pub struct QuorumDriverHandler<A> {
+pub struct QuorumDriverHandler<A: Clone> {
     quorum_driver: Arc<QuorumDriver<A>>,
     effects_subscriber: tokio::sync::broadcast::Receiver<QuorumDriverEffectsQueueResult>,
     quorum_driver_metrics: Arc<QuorumDriverMetrics>,
@@ -587,10 +583,7 @@ where
 
     // Used when the it is called in a component holding the notifier, and a ticket is
     // already obtained prior to calling this function, for instance, TransactionOrchestrator
-    pub async fn submit_transaction_no_ticket(
-        &self,
-        transaction: VerifiedTransaction,
-    ) -> SuiResult<()> {
+    pub async fn submit_transaction_no_ticket(&self, transaction: Transaction) -> SuiResult<()> {
         self.quorum_driver
             .submit_transaction_no_ticket(transaction)
             .await
@@ -598,7 +591,7 @@ where
 
     pub async fn submit_transaction(
         &self,
-        transaction: VerifiedTransaction,
+        transaction: Transaction,
     ) -> SuiResult<Registration<TransactionDigest, QuorumDriverResult>> {
         self.quorum_driver.submit_transaction(transaction).await
     }
@@ -694,6 +687,7 @@ where
                     let response = QuorumDriverResponse {
                         effects_cert,
                         events,
+                        objects: vec![],
                     };
                     quorum_driver.notify(&transaction, &Ok(response), old_retry_times + 1);
                     return;
@@ -714,15 +708,9 @@ where
         };
 
         let response = match quorum_driver.process_certificate(tx_cert.clone()).await {
-            Ok(QuorumDriverResponse {
-                effects_cert,
-                events,
-            }) => {
+            Ok(response) => {
                 debug!(?tx_digest, "Certificate processing succeeded");
-                QuorumDriverResponse {
-                    effects_cert,
-                    events,
-                }
+                response
             }
             // Note: non retryable failure when processing a cert
             // should be very rare.
@@ -744,9 +732,9 @@ where
 
     fn handle_error(
         quorum_driver: Arc<QuorumDriver<A>>,
-        transaction: VerifiedTransaction,
+        transaction: Transaction,
         err: Option<QuorumDriverError>,
-        tx_cert: Option<VerifiedCertificate>,
+        tx_cert: Option<CertifiedTransaction>,
         old_retry_times: u8,
         action: &'static str,
     ) {
@@ -770,7 +758,13 @@ where
         mut task_receiver: Receiver<QuorumDriverTask>,
         metrics: Arc<QuorumDriverMetrics>,
     ) {
+        let limit = Arc::new(Semaphore::new(TASK_QUEUE_SIZE));
         while let Some(task) = task_receiver.recv().await {
+            // hold semaphore permit until task completes. unwrap ok because we never close
+            // the semaphore in this context.
+            let limit = limit.clone();
+            let permit = limit.acquire_owned().await.unwrap();
+
             // TODO check reconfig process here
 
             debug!(?task, "Dequeued task");
@@ -784,12 +778,15 @@ where
             }
             metrics.current_requests_in_flight.dec();
             let qd = quorum_driver.clone();
-            spawn_monitored_task!(QuorumDriverHandler::process_task(qd, task));
+            spawn_monitored_task!(async move {
+                let _guard = permit;
+                QuorumDriverHandler::process_task(qd, task).await
+            });
         }
     }
 }
 
-pub struct QuorumDriverHandlerBuilder<A> {
+pub struct QuorumDriverHandlerBuilder<A: Clone> {
     validators: Arc<AuthorityAggregator<A>>,
     metrics: Arc<QuorumDriverMetrics>,
     notifier: Option<Arc<NotifyRead<TransactionDigest, QuorumDriverResult>>>,

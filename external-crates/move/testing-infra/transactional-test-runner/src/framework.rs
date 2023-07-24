@@ -9,6 +9,7 @@ use crate::tasks::{
     RunCommand, SyntaxChoice, TaskCommand, TaskInput, ViewCommand,
 };
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use clap::Parser;
 use move_binary_format::{
     binary_views::BinaryIndexedView,
@@ -25,8 +26,8 @@ use move_command_line_common::{
 };
 use move_compiler::{
     compiled_unit::AnnotatedCompiledUnit,
-    diagnostics::{Diagnostics, FilesSourceText},
-    shared::{NumberFormat, NumericalAddress},
+    diagnostics::{Diagnostics, FilesSourceText, WarningFilters},
+    shared::NumericalAddress,
     FullyCompiledProgram,
 };
 use move_core_types::{
@@ -42,6 +43,7 @@ use rayon::iter::Either;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::{Debug, Write as FmtWrite},
+    future::Future,
     io::Write,
     path::Path,
 };
@@ -104,27 +106,28 @@ fn merge_output(left: Option<String>, right: Option<String>) -> Option<String> {
     }
 }
 
-pub trait MoveTestAdapter<'a>: Sized {
-    type ExtraPublishArgs: Parser;
+#[async_trait]
+pub trait MoveTestAdapter<'a>: Sized + Send {
+    type ExtraPublishArgs: Send + Parser;
     type ExtraValueArgs: ParsableValue;
-    type ExtraRunArgs: Parser;
-    type Subcommand: Parser;
-    type ExtraInitArgs: Parser;
+    type ExtraRunArgs: Send + Parser;
+    type Subcommand: Send + Parser;
+    type ExtraInitArgs: Send + Parser;
 
     fn compiled_state(&mut self) -> &mut CompiledState<'a>;
     fn default_syntax(&self) -> SyntaxChoice;
-    fn init(
+    async fn init(
         default_syntax: SyntaxChoice,
         option: Option<&'a FullyCompiledProgram>,
         init_data: Option<TaskInput<(InitCommand, Self::ExtraInitArgs)>>,
     ) -> (Self, Option<String>);
-    fn publish_modules(
+    async fn publish_modules(
         &mut self,
         modules: Vec<(/* package name */ Option<Symbol>, CompiledModule)>,
         gas_budget: Option<u64>,
         extra: Self::ExtraPublishArgs,
     ) -> Result<(Option<String>, Vec<(Option<Symbol>, CompiledModule)>)>;
-    fn execute_script(
+    async fn execute_script(
         &mut self,
         script: CompiledScript,
         type_args: Vec<TypeTag>,
@@ -133,7 +136,7 @@ pub trait MoveTestAdapter<'a>: Sized {
         gas_budget: Option<u64>,
         extra: Self::ExtraRunArgs,
     ) -> Result<(Option<String>, SerializedReturnValues)>;
-    fn call_function(
+    async fn call_function(
         &mut self,
         module: &ModuleId,
         function: &IdentStr,
@@ -143,7 +146,7 @@ pub trait MoveTestAdapter<'a>: Sized {
         gas_budget: Option<u64>,
         extra: Self::ExtraRunArgs,
     ) -> Result<(Option<String>, SerializedReturnValues)>;
-    fn view_data(
+    async fn view_data(
         &mut self,
         address: AccountAddress,
         module: &ModuleId,
@@ -151,12 +154,12 @@ pub trait MoveTestAdapter<'a>: Sized {
         type_args: Vec<TypeTag>,
     ) -> Result<String>;
 
-    fn handle_subcommand(
+    async fn handle_subcommand(
         &mut self,
         subcommand: TaskInput<Self::Subcommand>,
     ) -> Result<Option<String>>;
 
-    fn handle_command(
+    async fn handle_command(
         &mut self,
         task: TaskInput<
             TaskCommand<
@@ -167,7 +170,10 @@ pub trait MoveTestAdapter<'a>: Sized {
                 Self::Subcommand,
             >,
         >,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<String>>
+    where
+        'a: 'async_trait,
+    {
         let TaskInput {
             command,
             name,
@@ -211,54 +217,20 @@ pub trait MoveTestAdapter<'a>: Sized {
             }
             TaskCommand::Publish(PublishCommand { gas_budget, syntax }, extra_args) => {
                 let syntax = syntax.unwrap_or_else(|| self.default_syntax());
-                let data = match data {
-                    Some(f) => f,
-                    None => panic!(
-                        "Expected a module text block following 'publish' starting on lines {}-{}",
-                        start_line, command_lines_stop
-                    ),
-                };
-                let state = self.compiled_state();
-                let (modules, warnings_opt) = match syntax {
-                    SyntaxChoice::Source => {
-                        let (units, warnings_opt) = compile_source_units(state, data.path(), None)?;
-                        let modules = units
-                            .into_iter()
-                            .map(|unit| match unit {
-                                AnnotatedCompiledUnit::Module(annot_module) => {
-                                    let (named_addr_opt, _id) = annot_module.module_id();
-                                    let named_addr_opt = named_addr_opt.map(|n| n.value);
-                                    let module = annot_module.named_module.module;
-                                    (named_addr_opt, module)
-                                }
-                                AnnotatedCompiledUnit::Script(_) => panic!(
-                                    "Expected a module text block, not a script, \
-                                    following 'publish' starting on lines {}-{}",
-                                    start_line, command_lines_stop
-                                ),
-                            })
-                            .collect();
-                        (modules, warnings_opt)
-                    }
-                    SyntaxChoice::IR => {
-                        let module = compile_ir_module(state, data.path())?;
-                        (vec![(None, module)], None)
-                    }
-                };
-                let (output, mut modules) =
-                    self.publish_modules(modules, gas_budget, extra_args)?;
-                match syntax {
-                    SyntaxChoice::Source => {
-                        let path = data.path().to_str().unwrap().to_owned();
-                        self.compiled_state()
-                            .add_with_source_file(modules, (path, data))
-                    }
-                    SyntaxChoice::IR => {
-                        let module = modules.pop().unwrap().1;
-                        self.compiled_state()
-                            .add_and_generate_interface_file(module);
-                    }
-                };
+                let (warnings_opt, output, data, modules) = compile_any(
+                    self,
+                    "publish",
+                    syntax,
+                    name,
+                    number,
+                    start_line,
+                    command_lines_stop,
+                    stop_line,
+                    data,
+                    |adapter, modules| adapter.publish_modules(modules, gas_budget, extra_args),
+                )
+                .await?;
+                store_modules(self, syntax, data, modules);
                 Ok(merge_output(warnings_opt, output))
             }
             TaskCommand::Run(
@@ -283,8 +255,7 @@ pub trait MoveTestAdapter<'a>: Sized {
                 let state = self.compiled_state();
                 let (script, warning_opt) = match syntax {
                     SyntaxChoice::Source => {
-                        let (mut units, warning_opt) =
-                            compile_source_units(state, data.path(), None)?;
+                        let (mut units, warning_opt) = compile_source_units(state, data.path())?;
                         let len = units.len();
                         if len != 1 {
                             panic!("Invalid input. Expected 1 compiled unit but got {}", len)
@@ -302,8 +273,9 @@ pub trait MoveTestAdapter<'a>: Sized {
                 };
                 let args = self.compiled_state().resolve_args(args)?;
                 let type_args = self.compiled_state().resolve_type_args(type_args)?;
-                let (output, return_values) =
-                    self.execute_script(script, type_args, signers, args, gas_budget, extra_args)?;
+                let (output, return_values) = self
+                    .execute_script(script, type_args, signers, args, gas_budget, extra_args)
+                    .await?;
                 let rendered_return_value = display_return_values(return_values);
                 Ok(merge_output(
                     warning_opt,
@@ -329,15 +301,17 @@ pub trait MoveTestAdapter<'a>: Sized {
                 let module_id = ModuleId::new(addr, module_name);
                 let type_args = self.compiled_state().resolve_type_args(type_args)?;
                 let args = self.compiled_state().resolve_args(args)?;
-                let (output, return_values) = self.call_function(
-                    &module_id,
-                    name.as_ident_str(),
-                    type_args,
-                    signers,
-                    args,
-                    gas_budget,
-                    extra_args,
-                )?;
+                let (output, return_values) = self
+                    .call_function(
+                        &module_id,
+                        name.as_ident_str(),
+                        type_args,
+                        signers,
+                        args,
+                        gas_budget,
+                        extra_args,
+                    )
+                    .await?;
                 let rendered_return_value = display_return_values(return_values);
                 Ok(merge_output(output, rendered_return_value))
             }
@@ -353,22 +327,23 @@ pub trait MoveTestAdapter<'a>: Sized {
                     .unwrap();
                 let module_id = ModuleId::new(module_addr, module);
                 let address = self.compiled_state().resolve_address(&address);
-                Ok(Some(self.view_data(
-                    address,
-                    &module_id,
-                    name.as_ident_str(),
-                    type_arguments,
-                )?))
+                Ok(Some(
+                    self.view_data(address, &module_id, name.as_ident_str(), type_arguments)
+                        .await?,
+                ))
             }
-            TaskCommand::Subcommand(c) => self.handle_subcommand(TaskInput {
-                command: c,
-                name,
-                number,
-                start_line,
-                command_lines_stop,
-                stop_line,
-                data,
-            }),
+            TaskCommand::Subcommand(c) => {
+                self.handle_subcommand(TaskInput {
+                    command: c,
+                    name,
+                    number,
+                    start_line,
+                    command_lines_stop,
+                    stop_line,
+                    data,
+                })
+                .await
+            }
         }
     }
 }
@@ -538,10 +513,91 @@ impl<'a> CompiledState<'a> {
     }
 }
 
+pub async fn compile_any<'state, 'adapter: 'result, 'result, F, A, R>(
+    test_adapter: &'adapter mut A,
+    command: &str,
+    syntax: SyntaxChoice,
+    _name: String,
+    _number: usize,
+    start_line: usize,
+    command_lines_stop: usize,
+    _stop_line: usize,
+    data: Option<NamedTempFile>,
+    handler: F,
+) -> Result<(
+    Option<String>,
+    Option<String>,
+    NamedTempFile,
+    Vec<(Option<Symbol>, CompiledModule)>,
+)>
+where
+    A: MoveTestAdapter<'state> + 'adapter,
+    F: FnOnce(&'adapter mut A, Vec<(Option<Symbol>, CompiledModule)>) -> R,
+    R: Future<Output = Result<(Option<String>, Vec<(Option<Symbol>, CompiledModule)>)>> + 'result,
+{
+    let data = match data {
+        Some(f) => f,
+        None => panic!(
+            "Expected a module text block following '{command}' starting on lines {}-{}",
+            start_line, command_lines_stop
+        ),
+    };
+    let state = test_adapter.compiled_state();
+    let (modules, warnings_opt) = match syntax {
+        SyntaxChoice::Source => {
+            let (units, warnings_opt) = compile_source_units(state, data.path())?;
+            let modules = units
+                .into_iter()
+                .map(|unit| match unit {
+                    AnnotatedCompiledUnit::Module(annot_module) => {
+                        let (named_addr_opt, _id) = annot_module.module_id();
+                        let named_addr_opt = named_addr_opt.map(|n| n.value);
+                        let module = annot_module.named_module.module;
+                        (named_addr_opt, module)
+                    }
+                    AnnotatedCompiledUnit::Script(_) => panic!(
+                        "Expected a module text block, not a script, \
+                        following '{command}' starting on lines {}-{}",
+                        start_line, command_lines_stop
+                    ),
+                })
+                .collect();
+            (modules, warnings_opt)
+        }
+        SyntaxChoice::IR => {
+            let module = compile_ir_module(state, data.path())?;
+            (vec![(None, module)], None)
+        }
+    };
+    let (output, modules) = handler(test_adapter, modules).await?;
+    Ok((warnings_opt, output, data, modules))
+}
+
+pub fn store_modules<'a, A: MoveTestAdapter<'a>>(
+    test_adapter: &mut A,
+    syntax: SyntaxChoice,
+    data: NamedTempFile,
+    mut modules: Vec<(Option<Symbol>, CompiledModule)>,
+) {
+    match syntax {
+        SyntaxChoice::Source => {
+            let path = data.path().to_str().unwrap().to_owned();
+            test_adapter
+                .compiled_state()
+                .add_with_source_file(modules, (path, data))
+        }
+        SyntaxChoice::IR => {
+            let module = modules.pop().unwrap().1;
+            test_adapter
+                .compiled_state()
+                .add_and_generate_interface_file(module);
+        }
+    }
+}
+
 pub fn compile_source_units(
     state: &CompiledState,
     file_name: impl AsRef<Path>,
-    package_name: Option<String>,
 ) -> Result<(Vec<AnnotatedCompiledUnit>, Option<String>)> {
     fn rendered_diags(files: &FilesSourceText, diags: Diagnostics) -> Option<String> {
         if diags.is_empty() {
@@ -557,16 +613,11 @@ pub fn compile_source_units(
     }
 
     use move_compiler::PASS_COMPILATION;
-    let mut named_address_mapping = state.named_address_mapping.clone();
-    if let Some(package_name) = package_name {
-        // When a package_name is specified, create a fresh mapping for it by
-        // zero-ing the address for an existing mapping. Required for upgrading
-        // (i.e, re-publishing) an existing named package.
-        named_address_mapping.insert(
-            package_name,
-            NumericalAddress::new(AccountAddress::ZERO.into_bytes(), NumberFormat::Hex),
-        );
-    };
+    let named_address_mapping = state.named_address_mapping.clone();
+    // txn testing framework test code includes private unused functions and unused struct types on
+    // purpose and generating warnings for all of them does not make much sense (and there would be
+    // a lot of them!) so let's suppress them function warnings, so let's suppress these
+    let warning_filter = WarningFilters::unused_function_warnings_filter();
     let (mut files, comments_and_compiler_res) = move_compiler::Compiler::from_files(
         vec![file_name.as_ref().to_str().unwrap().to_owned()],
         state.source_files().cloned().collect::<Vec<_>>(),
@@ -574,6 +625,7 @@ pub fn compile_source_units(
     )
     .set_pre_compiled_lib_opt(state.pre_compiled_deps)
     .set_flags(move_compiler::Flags::empty().set_sources_shadow_deps(true))
+    .set_warning_filter(Some(warning_filter))
     .run::<PASS_COMPILATION>()?;
     let units_or_diags = comments_and_compiler_res
         .map(|(_comments, move_compiler)| move_compiler.into_compiled_units());
@@ -615,7 +667,7 @@ pub fn compile_ir_script(
     Ok(script)
 }
 
-pub fn run_test_impl<'a, Adapter>(
+pub async fn run_test_impl<'a, Adapter>(
     path: &Path,
     fully_compiled_program_opt: Option<&'a FullyCompiledProgram>,
 ) -> Result<(), Box<dyn std::error::Error>>
@@ -668,18 +720,18 @@ where
         }
     };
     let (mut adapter, result_opt) =
-        Adapter::init(default_syntax, fully_compiled_program_opt, init_opt);
+        Adapter::init(default_syntax, fully_compiled_program_opt, init_opt).await;
     if let Some(result) = result_opt {
         writeln!(output, "\ninit:\n{}", result)?;
     }
     for task in tasks {
-        handle_known_task(&mut output, &mut adapter, task);
+        handle_known_task(&mut output, &mut adapter, task).await;
     }
     handle_expected_output(path, output)?;
     Ok(())
 }
 
-fn handle_known_task<'a, Adapter: MoveTestAdapter<'a>>(
+async fn handle_known_task<'a, Adapter: MoveTestAdapter<'a>>(
     output: &mut String,
     adapter: &mut Adapter,
     task: TaskInput<
@@ -696,7 +748,7 @@ fn handle_known_task<'a, Adapter: MoveTestAdapter<'a>>(
     let task_name = task.name.to_owned();
     let start_line = task.start_line;
     let stop_line = task.stop_line;
-    let result = adapter.handle_command(task);
+    let result = adapter.handle_command(task).await;
     let result_string = match result {
         Ok(None) => return,
         Ok(Some(s)) => s,

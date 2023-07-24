@@ -35,7 +35,7 @@ pub struct Balance {
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize, Debug, JsonSchema, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, JsonSchema, PartialEq, Eq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Coin {
     pub coin_type: String,
@@ -47,9 +47,6 @@ pub struct Coin {
     #[schemars(with = "BigInt<u64>")]
     #[serde_as(as = "BigInt<u64>")]
     pub balance: u64,
-    #[schemars(with = "Option<BigInt<u64>>")]
-    #[serde_as(as = "Option<BigInt<u64>>")]
-    pub locked_until_epoch: Option<EpochId>,
     pub previous_transaction: TransactionDigest,
 }
 
@@ -59,7 +56,7 @@ impl Coin {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone)]
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SuiCoinMetadata {
     /// Number of decimal places the coin uses.

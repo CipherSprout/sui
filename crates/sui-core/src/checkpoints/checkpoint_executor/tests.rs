@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use fastcrypto::traits::KeyPair;
 use sui_config::node::ExpensiveSafetyCheckConfig;
 use sui_types::gas::GasCostSummary;
 use tempfile::tempdir;
@@ -20,7 +19,7 @@ use crate::authority::test_authority_builder::TestAuthorityBuilder;
 use crate::{
     authority::AuthorityState, checkpoints::CheckpointStore, state_accumulator::StateAccumulator,
 };
-use sui_network::state_sync::test_utils::{empty_contents, CommitteeFixture};
+use sui_swarm_config::test_utils::{empty_contents, CommitteeFixture};
 use sui_types::sui_system_state::epoch_start_sui_system_state::EpochStartSystemState;
 
 /// Test checkpoint executor happy path, test that checkpoint executor correctly
@@ -90,7 +89,7 @@ pub async fn test_checkpoint_executor_crash_recovery() {
     let epoch_store = state.epoch_store_for_testing().clone();
     let executor_handle =
         spawn_monitored_task!(async move { executor.run_epoch(epoch_store).await });
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(15)).await;
 
     let highest_executed = checkpoint_store
         .get_highest_executed_checkpoint_seq_number()
@@ -386,15 +385,11 @@ async fn init_executor_test(
     Sender<VerifiedCheckpoint>,
     CommitteeFixture,
 ) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let network_config = sui_config::builder::ConfigBuilder::new(&dir).build();
-    let genesis = network_config.genesis;
-    let committee = CommitteeFixture::generate(rand::rngs::OsRng, 0, 4);
-    let keypair = network_config.validator_configs[0]
-        .protocol_key_pair()
-        .copy();
+    let network_config =
+        sui_swarm_config::network_config_builder::ConfigBuilder::new_with_temp_dir().build();
     let state = TestAuthorityBuilder::new()
-        .build(committee.committee().clone(), &keypair, &genesis)
+        .with_network_config(&network_config)
+        .build()
         .await;
 
     let (checkpoint_sender, _): (Sender<VerifiedCheckpoint>, Receiver<VerifiedCheckpoint>) =
@@ -410,7 +405,13 @@ async fn init_executor_test(
         state.transaction_manager().clone(),
         accumulator.clone(),
     );
-    (state, executor, accumulator, checkpoint_sender, committee)
+    (
+        state,
+        executor,
+        accumulator,
+        checkpoint_sender,
+        CommitteeFixture::from_network_config(&network_config),
+    )
 }
 
 /// Creates and simulates syncing of a new checkpoint by StateSync, i.e. new
@@ -424,8 +425,8 @@ fn sync_new_checkpoints(
     previous_checkpoint: Option<VerifiedCheckpoint>,
     committee: &CommitteeFixture,
 ) -> Vec<VerifiedCheckpoint> {
-    let (ordered_checkpoints, _sequence_number_to_digest, _checkpoints) =
-        committee.make_checkpoints(number_of_checkpoints, previous_checkpoint);
+    let (ordered_checkpoints, _, _sequence_number_to_digest, _checkpoints) =
+        committee.make_empty_checkpoints(number_of_checkpoints, previous_checkpoint);
 
     for checkpoint in ordered_checkpoints.iter() {
         sync_checkpoint(checkpoint, checkpoint_store, sender);
@@ -470,7 +471,7 @@ fn sync_checkpoint(
     sender: &Sender<VerifiedCheckpoint>,
 ) {
     checkpoint_store
-        .insert_verified_checkpoint(checkpoint.clone())
+        .insert_verified_checkpoint(checkpoint)
         .unwrap();
     checkpoint_store
         .insert_checkpoint_contents(empty_contents().into_inner().into_checkpoint_contents())

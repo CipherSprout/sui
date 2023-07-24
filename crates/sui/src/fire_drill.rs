@@ -18,20 +18,18 @@ use fastcrypto::traits::{KeyPair, ToFromBytes};
 use move_core_types::ident_str;
 use shared_crypto::intent::Intent;
 use std::path::{Path, PathBuf};
-use sui_config::node::KeyPairWithPath;
-use sui_config::utils;
-use sui_config::{node::AuthorityKeyPairWithPath, Config, NodeConfig, PersistedConfig};
+use sui_config::node::{AuthorityKeyPairWithPath, KeyPairWithPath};
+use sui_config::{local_ip_utils, Config, NodeConfig, PersistedConfig};
 use sui_json_rpc_types::{SuiExecutionStatus, SuiTransactionBlockResponseOptions};
 use sui_keys::keypair_file::read_keypair_from_file;
 use sui_sdk::{rpc_types::SuiTransactionBlockEffectsAPI, SuiClient, SuiClientBuilder};
 use sui_types::base_types::{ObjectRef, SuiAddress};
 use sui_types::crypto::{generate_proof_of_possession, get_key_pair, SuiKeyPair};
-use sui_types::messages::{
-    CallArg, ObjectArg, Transaction, TransactionData, TEST_ONLY_GAS_UNIT_FOR_GENERIC,
-};
 use sui_types::multiaddr::{Multiaddr, Protocol};
+use sui_types::transaction::{
+    CallArg, Transaction, TransactionData, TEST_ONLY_GAS_UNIT_FOR_GENERIC,
+};
 use sui_types::{committee::EpochId, crypto::get_authority_key_pair, SUI_SYSTEM_PACKAGE_ID};
-use sui_types::{SUI_SYSTEM_STATE_OBJECT_ID, SUI_SYSTEM_STATE_OBJECT_SHARED_VERSION};
 use tracing::info;
 
 #[derive(Parser)]
@@ -167,7 +165,8 @@ async fn update_next_epoch_metadata(
     let http = new_network_address.pop().unwrap();
     // pop out tcp
     new_network_address.pop().unwrap();
-    let new_port = utils::get_available_port("127.0.0.1");
+    let localhost = local_ip_utils::localhost_for_testing();
+    let new_port = local_ip_utils::get_available_port(&localhost);
     new_network_address.push(Protocol::Tcp(new_port));
     new_network_address.push(http);
     info!("New network address: {:?}", new_network_address);
@@ -178,7 +177,7 @@ async fn update_next_epoch_metadata(
     info!("Current P2P external address: {:?}", new_external_address);
     // pop out udp
     new_external_address.pop().unwrap();
-    let new_port = utils::get_available_port("127.0.0.1");
+    let new_port = local_ip_utils::get_available_port(&localhost);
     new_external_address.push(Protocol::Udp(new_port));
     info!("New P2P external address: {:?}", new_external_address);
     new_config.p2p_config.external_address = Some(new_external_address.clone());
@@ -195,7 +194,7 @@ async fn update_next_epoch_metadata(
     info!("Current primary address: {:?}", new_primary_addresses);
     // pop out udp
     new_primary_addresses.pop().unwrap();
-    let new_port = utils::get_available_port("127.0.0.1");
+    let new_port = local_ip_utils::get_available_port(&localhost);
     new_primary_addresses.push(Protocol::Udp(new_port));
     info!("New primary address: {:?}", new_primary_addresses);
 
@@ -212,7 +211,7 @@ async fn update_next_epoch_metadata(
     info!("Current worker address: {:?}", new_worker_addresses);
     // pop out udp
     new_worker_addresses.pop().unwrap();
-    let new_port = utils::get_available_port("127.0.0.1");
+    let new_port = local_ip_utils::get_available_port(&localhost);
     new_worker_addresses.push(Protocol::Udp(new_port));
     info!("New worker address:: {:?}", new_worker_addresses);
 
@@ -313,11 +312,7 @@ async fn update_metadata_on_chain(
         .governance_api()
         .get_reference_gas_price()
         .await?;
-    let mut args = vec![CallArg::Object(ObjectArg::SharedObject {
-        id: SUI_SYSTEM_STATE_OBJECT_ID,
-        initial_shared_version: SUI_SYSTEM_STATE_OBJECT_SHARED_VERSION,
-        mutable: true,
-    })];
+    let mut args = vec![CallArg::SUI_SYSTEM_MUT];
     args.extend(call_args);
     let tx_data = TransactionData::new_move_call(
         sui_address,
@@ -343,16 +338,15 @@ async fn execute_tx(
     action: &str,
 ) -> anyhow::Result<()> {
     let tx =
-        Transaction::from_data_and_signer(tx_data, Intent::sui_transaction(), vec![account_key])
-            .verify()?;
+        Transaction::from_data_and_signer(tx_data, Intent::sui_transaction(), vec![account_key]);
     info!("Executing {:?}", tx.digest());
     let tx_digest = *tx.digest();
     let resp = sui_client
-        .quorum_driver()
+        .quorum_driver_api()
         .execute_transaction_block(
             tx,
             SuiTransactionBlockResponseOptions::full_content(),
-            Some(sui_types::messages::ExecuteTransactionRequestType::WaitForLocalExecution),
+            Some(sui_types::quorum_driver_types::ExecuteTransactionRequestType::WaitForLocalExecution),
         )
         .await
         .unwrap();

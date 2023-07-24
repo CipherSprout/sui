@@ -6,12 +6,6 @@ module sui::vec_set_tests {
     use std::vector;
     use sui::vec_set;
 
-    fun key_contains() {
-        let m = vec_set::empty();
-        vec_set::insert(&mut m, 1);
-        assert!(vec_set::contains(&m, &1), 0);
-    }
-
     #[test]
     #[expected_failure(abort_code = vec_set::EKeyAlreadyExists)]
     fun duplicate_key_abort() {
@@ -58,4 +52,14 @@ module sui::vec_set_tests {
         }
     }
 
+    #[test]
+    fun test_keys() {
+        let m = vec_set::empty();
+        vec_set::insert(&mut m, 1);
+        vec_set::insert(&mut m, 2);
+        vec_set::insert(&mut m, 3);
+
+        assert!(vec_set::size(&m) == 3, 0);
+        assert!(vec_set::keys(&m) == &vector[1, 2, 3], 1);
+    }
 }

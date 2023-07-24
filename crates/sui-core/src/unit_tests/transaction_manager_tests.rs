@@ -3,15 +3,17 @@
 
 use std::{time::Duration, vec};
 
+use sui_test_transaction_builder::TestTransactionBuilder;
+use sui_types::executable_transaction::VerifiedExecutableTransaction;
+use sui_types::transaction::VerifiedTransaction;
 use sui_types::{
     base_types::ObjectID,
     crypto::deterministic_random_account_key,
     digests::TransactionEffectsDigest,
-    messages::{CallArg, ObjectArg, VerifiedExecutableTransaction, TEST_ONLY_GAS_UNIT_FOR_GENERIC},
     object::Object,
-    SUI_FRAMEWORK_OBJECT_ID,
+    transaction::{CallArg, ObjectArg},
+    SUI_FRAMEWORK_PACKAGE_ID,
 };
-use test_utils::messages::move_transaction;
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver},
     time::sleep,
@@ -51,16 +53,12 @@ fn make_transaction(gas_object: Object, input: Vec<CallArg>) -> VerifiedExecutab
     // Use fake module, function, package and gas prices since they are irrelevant for testing
     // transaction manager.
     let rgp = 100;
-    let transaction = move_transaction(
-        gas_object,
-        "counter",
-        "assert_value",
-        SUI_FRAMEWORK_OBJECT_ID,
-        input,
-        rgp,
-        rgp * TEST_ONLY_GAS_UNIT_FOR_GENERIC,
-    );
-    VerifiedExecutableTransaction::new_system(transaction, 0)
+    let (sender, keypair) = deterministic_random_account_key();
+    let transaction =
+        TestTransactionBuilder::new(sender, gas_object.compute_object_reference(), rgp)
+            .move_call(SUI_FRAMEWORK_PACKAGE_ID, "counter", "assert_value", input)
+            .build_and_sign(&keypair);
+    VerifiedExecutableTransaction::new_system(VerifiedTransaction::new_unchecked(transaction), 0)
 }
 
 fn get_input_keys(objects: &[Object]) -> Vec<InputKey> {

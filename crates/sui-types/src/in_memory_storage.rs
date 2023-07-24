@@ -15,6 +15,7 @@ use move_binary_format::CompiledModule;
 use move_bytecode_utils::module_cache::GetModule;
 use move_core_types::{language_storage::ModuleId, resolver::ModuleResolver};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 // TODO: We should use AuthorityTemporaryStore instead.
 // Keeping this functionally identical to AuthorityTemporaryStore is a pain.
@@ -22,6 +23,7 @@ use std::collections::BTreeMap;
 pub struct InMemoryStorage {
     persistent: BTreeMap<ObjectID, Object>,
     last_entry_for_deleted: BTreeMap<ObjectID, ObjectRef>,
+    wrapped: BTreeMap<ObjectID, VersionNumber>,
 }
 
 impl BackingPackageStore for InMemoryStorage {
@@ -31,7 +33,12 @@ impl BackingPackageStore for InMemoryStorage {
 }
 
 impl ChildObjectResolver for InMemoryStorage {
-    fn read_child_object(&self, parent: &ObjectID, child: &ObjectID) -> SuiResult<Option<Object>> {
+    fn read_child_object(
+        &self,
+        parent: &ObjectID,
+        child: &ObjectID,
+        child_version_upper_bound: SequenceNumber,
+    ) -> SuiResult<Option<Object>> {
         let child_object = match self.persistent.get(child).cloned() {
             None => return Ok(None),
             Some(obj) => obj,
@@ -42,6 +49,12 @@ impl ChildObjectResolver for InMemoryStorage {
                 object: *child,
                 given_parent: parent,
                 actual_owner: child_object.owner,
+            });
+        }
+        if child_object.version() > child_version_upper_bound {
+            return Err(SuiError::UnsupportedFeatureError {
+                error: "TODO InMemoryStorage::read_child_object does not yet support bounded reads"
+                    .to_owned(),
             });
         }
         Ok(Some(child_object))
@@ -138,15 +151,16 @@ impl GetModule for InMemoryStorage {
 }
 
 impl InMemoryStorage {
-    pub fn new(objects: Vec<Object>) -> Self {
+    pub fn new(objects: Vec<Object>) -> Arc<Self> {
         let mut persistent = BTreeMap::new();
         for o in objects {
             persistent.insert(o.id(), o);
         }
-        Self {
+        Arc::new(Self {
             persistent,
             last_entry_for_deleted: BTreeMap::new(),
-        }
+            wrapped: BTreeMap::new(),
+        })
     }
 
     pub fn get_object(&self, id: &ObjectID) -> Option<&Object> {
@@ -164,11 +178,20 @@ impl InMemoryStorage {
     pub fn insert_object(&mut self, object: Object) {
         let id = object.id();
         self.last_entry_for_deleted.remove(&id);
+        self.wrapped.remove(&id);
         self.persistent.insert(id, object);
     }
 
     pub fn objects(&self) -> &BTreeMap<ObjectID, Object> {
         &self.persistent
+    }
+
+    pub fn wrapped(&self) -> &BTreeMap<ObjectID, VersionNumber> {
+        &self.wrapped
+    }
+
+    pub fn get_wrapped(&self, id: &ObjectID) -> Option<VersionNumber> {
+        self.wrapped.get(id).copied()
     }
 
     pub fn into_inner(self) -> BTreeMap<ObjectID, Object> {
@@ -185,10 +208,19 @@ impl InMemoryStorage {
             debug_assert!(new_object.id() == _id);
             self.insert_object(new_object);
         }
-        for (id, _) in deleted {
+        for (id, (ver, kind)) in deleted {
             if let Some(obj) = self.persistent.remove(&id) {
                 self.last_entry_for_deleted
                     .insert(id, obj.compute_object_reference());
+            }
+            match kind {
+                DeleteKind::Wrap => {
+                    self.wrapped.insert(id, ver);
+                }
+                DeleteKind::UnwrapThenDelete => {
+                    self.wrapped.remove(&id);
+                }
+                _ => (),
             }
         }
     }

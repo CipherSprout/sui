@@ -2,13 +2,15 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{package_hooks, source_package::parsed_manifest as PM, Architecture};
+use crate::{package_hooks, source_package::parsed_manifest as PM};
 use anyhow::{anyhow, bail, format_err, Context, Result};
+use move_compiler::editions::{Edition, Flavor};
 use move_core_types::account_address::{AccountAddress, AccountAddressParseError};
 use move_symbol_pool::symbol::Symbol;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    str::FromStr,
 };
 use toml::Value as TV;
 
@@ -111,7 +113,7 @@ pub fn parse_package_info(tval: TV) -> Result<PM::PackageInfo> {
         TV::Table(mut table) => {
             check_for_required_field_names(&table, &["name", "version"])?;
             let hook_names = package_hooks::custom_package_info_fields();
-            let known_names = ["name", "version", "authors", "license"]
+            let known_names = ["name", "version", "authors", "license", "edition", "flavor"]
                 .into_iter()
                 .chain(hook_names.iter().map(|s| s.as_str()))
                 .collect::<Vec<_>>();
@@ -150,6 +152,24 @@ pub fn parse_package_info(tval: TV) -> Result<PM::PackageInfo> {
                         .collect::<Result<_>>()?
                 }
             };
+            let edition = table
+                .remove("edition")
+                .map(|v| {
+                    let s = v
+                        .as_str()
+                        .ok_or_else(|| format_err!("'edition' must be a string"))?;
+                    Edition::from_str(s).map_err(|err| format_err!("Invalid 'edition'. {err}"))
+                })
+                .transpose()?;
+            let flavor = table
+                .remove("flavor")
+                .map(|v| {
+                    let s = v
+                        .as_str()
+                        .ok_or_else(|| format_err!("'flavor' must be a string"))?;
+                    Flavor::from_str(s).map_err(|err| format_err!("Invalid 'flavor'. {err}"))
+                })
+                .transpose()?;
             // Turn the remaining entries into custom properties. For those which are not
             // supported (also in the presence of hooks) we have warned above.
             let mut custom_properties: BTreeMap<Symbol, String> = Default::default();
@@ -166,6 +186,8 @@ pub fn parse_package_info(tval: TV) -> Result<PM::PackageInfo> {
                 authors,
                 license,
                 custom_properties,
+                edition,
+                flavor,
             })
         }
         x => bail!(
@@ -204,7 +226,6 @@ pub fn parse_build_info(tval: TV) -> Result<PM::BuildInfo> {
                     .remove("language_version")
                     .map(parse_version)
                     .transpose()?,
-                architecture: table.remove("arch").map(parse_architecture).transpose()?,
             })
         }
         x => bail!(
@@ -334,6 +355,11 @@ pub fn parse_dependency(dep_name: &str, mut tval: TV) -> Result<PM::Dependency> 
         .transpose()?;
     let version = table.remove("version").map(parse_version).transpose()?;
     let digest = table.remove("digest").map(parse_digest).transpose()?;
+    let dep_override = table
+        .remove("override")
+        .map(parse_dep_override)
+        .transpose()?
+        .map_or(false, |o| o);
 
     let kind = match (
         table.remove("local"),
@@ -350,7 +376,10 @@ pub fn parse_dependency(dep_name: &str, mut tval: TV) -> Result<PM::Dependency> 
                 bail!("Local source path not a string")
             };
 
-            PM::DependencyKind::Local(local)
+            PM::DependencyKind::Local(
+                // with allow_cwd_parent set to true, it never fails
+                PM::normalize_path(local, true /* allow_cwd_parent */).unwrap(),
+            )
         }
 
         (None, subdir, Some(git_url), None) => {
@@ -433,6 +462,7 @@ pub fn parse_dependency(dep_name: &str, mut tval: TV) -> Result<PM::Dependency> 
         subst,
         version,
         digest,
+        dep_override,
     }))
 }
 
@@ -491,15 +521,18 @@ fn parse_version(tval: TV) -> Result<PM::Version> {
     ))
 }
 
-fn parse_architecture(tval: TV) -> Result<Architecture> {
-    Architecture::try_parse_from_str(tval.as_str().unwrap())
-}
-
 fn parse_digest(tval: TV) -> Result<PM::PackageDigest> {
     let digest_str = tval
         .as_str()
         .ok_or_else(|| format_err!("Invalid package digest"))?;
     Ok(PM::PackageDigest::from(digest_str))
+}
+
+fn parse_dep_override(tval: TV) -> Result<PM::DepOverride> {
+    if !tval.is_bool() {
+        bail!("Invalid dependency override value");
+    }
+    Ok(tval.as_bool().unwrap())
 }
 
 // check that only recognized names are provided at the top-level

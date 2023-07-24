@@ -3,7 +3,6 @@
 
 use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
-use std::path::Path;
 use std::str::FromStr;
 
 use fastcrypto::encoding::{Encoding, Hex};
@@ -13,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use sui_config::utils;
+use sui_config::local_ip_utils;
 use sui_keys::keystore::AccountKeystore;
 use sui_keys::keystore::Keystore;
 use sui_rosetta::operations::Operations;
@@ -31,16 +30,14 @@ use sui_types::crypto::SuiSignature;
 
 pub async fn start_rosetta_test_server(
     client: SuiClient,
-    dir: &Path,
 ) -> (RosettaClient, Vec<JoinHandle<hyper::Result<()>>>) {
-    let online_server =
-        RosettaOnlineServer::new(SuiEnv::LocalNet, client, &dir.join("rosetta_data"));
+    let online_server = RosettaOnlineServer::new(SuiEnv::LocalNet, client);
     let offline_server = RosettaOfflineServer::new(SuiEnv::LocalNet);
-    let local_ip = utils::get_local_ip_for_tests().to_string();
-    let port = utils::get_available_port(&local_ip);
+    let local_ip = local_ip_utils::localhost_for_testing();
+    let port = local_ip_utils::get_available_port(&local_ip);
     let rosetta_address = format!("{}:{}", local_ip, port);
     let online_handle = online_server.serve(SocketAddr::from_str(&rosetta_address).unwrap());
-    let offline_port = utils::get_available_port(&local_ip);
+    let offline_port = local_ip_utils::get_available_port(&local_ip);
     let offline_address = format!("{}:{}", local_ip, offline_port);
     let offline_handle = offline_server.serve(SocketAddr::from_str(&offline_address).unwrap());
 

@@ -7,13 +7,16 @@ use std::str::FromStr;
 
 use hyper::header::HeaderName;
 use hyper::header::HeaderValue;
+use hyper::Body;
 use hyper::Method;
-pub use jsonrpsee::server::ServerHandle;
+use hyper::Request;
 use jsonrpsee::server::{AllowHosts, ServerBuilder};
 use jsonrpsee::RpcModule;
 use prometheus::Registry;
 use tap::TapFallible;
+use tokio::runtime::Handle;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 pub use balance_changes::*;
@@ -30,8 +33,10 @@ pub mod coin_api;
 pub mod error;
 pub mod governance_api;
 pub mod indexer_api;
+pub mod logger;
 mod metrics;
 pub mod move_utils;
+mod name_service;
 mod object_changes;
 pub mod read_api;
 mod routing_layer;
@@ -48,13 +53,6 @@ pub const APP_NAME_HEADER: &str = "app-name";
 
 pub const MAX_REQUEST_SIZE: u32 = 2 << 30;
 
-#[cfg(test)]
-#[path = "unit_tests/rpc_server_tests.rs"]
-mod rpc_server_test;
-#[cfg(test)]
-#[path = "unit_tests/transaction_tests.rs"]
-mod transaction_tests;
-
 pub struct JsonRpcServerBuilder {
     module: RpcModule<()>,
     rpc_doc: Project,
@@ -65,7 +63,7 @@ pub fn sui_rpc_doc(version: &str) -> Project {
     Project::new(
         version,
         "Sui JSON-RPC",
-        "Sui JSON-RPC API for interaction with Sui Full node.",
+        "Sui JSON-RPC API for interaction with Sui Full node. Make RPC calls using https://fullnode.NETWORK.sui.io:443, where NETWORK is the network you want to use (testnet, devnet, mainnet). By default, local networks use port 9000.",
         "Mysten Labs",
         "https://mystenlabs.com",
         "build@mystenlabs.com",
@@ -88,7 +86,11 @@ impl JsonRpcServerBuilder {
         Ok(self.module.merge(module.rpc())?)
     }
 
-    pub async fn start(mut self, listen_address: SocketAddr) -> Result<ServerHandle, Error> {
+    pub async fn start(
+        mut self,
+        listen_address: SocketAddr,
+        custom_runtime: Option<Handle>,
+    ) -> Result<ServerHandle, Error> {
         let acl = match env::var("ACCESS_CONTROL_ALLOW_ORIGIN") {
             Ok(value) => {
                 let allow_hosts = value
@@ -147,25 +149,57 @@ impl JsonRpcServerBuilder {
         let routing_layer = RoutingLayer::new(routing, disable_routing);
 
         let middleware = tower::ServiceBuilder::new()
+            .layer(
+                TraceLayer::new_for_http()
+                    .make_span_with(|request: &Request<Body>| {
+                        let request_id = request
+                            .headers()
+                            .get("x-req-id")
+                            .and_then(|v| v.to_str().ok())
+                            .map(tracing::field::display);
+
+                        tracing::info_span!("json-rpc-request", "x-req-id" = request_id)
+                    })
+                    .on_request(())
+                    .on_response(())
+                    .on_body_chunk(())
+                    .on_eos(())
+                    .on_failure(()),
+            )
             .layer(cors)
             .layer(routing_layer);
 
-        let server = ServerBuilder::default()
+        let mut builder = ServerBuilder::default()
             .batch_requests_supported(false)
             .max_response_body_size(MAX_REQUEST_SIZE)
             .max_connections(max_connection)
             .set_host_filtering(AllowHosts::Any)
             .set_middleware(middleware)
-            .set_logger(metrics_logger)
-            .build(listen_address)
-            .await?;
-        let addr = server.local_addr()?;
-        let handle = server.start(self.module)?;
+            .set_logger(metrics_logger);
 
+        if let Some(custom_runtime) = custom_runtime {
+            builder = builder.custom_tokio_runtime(custom_runtime);
+        }
+
+        let server = builder.build(listen_address).await?;
+
+        let addr = server.local_addr()?;
+        let handle = ServerHandle {
+            handle: server.start(self.module)?,
+        };
         info!(local_addr =? addr, "Sui JSON-RPC server listening on {addr}");
         info!("Available JSON-RPC methods : {:?}", methods_names);
-
         Ok(handle)
+    }
+}
+
+pub struct ServerHandle {
+    handle: jsonrpsee::server::ServerHandle,
+}
+
+impl ServerHandle {
+    pub async fn stopped(self) {
+        self.handle.stopped().await
     }
 }
 

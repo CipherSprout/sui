@@ -11,14 +11,14 @@ use narwhal_types::TransactionsServer;
 use narwhal_types::{Empty, TransactionProto};
 use sui_network::tonic;
 use sui_types::crypto::deterministic_random_account_key;
-use sui_types::messages::TEST_ONLY_GAS_UNIT_FOR_OBJECT_BASICS;
 use sui_types::multiaddr::Multiaddr;
+use sui_types::transaction::TEST_ONLY_GAS_UNIT_FOR_OBJECT_BASICS;
 use sui_types::utils::to_sender_signed_transaction;
-use sui_types::SUI_FRAMEWORK_OBJECT_ID;
+use sui_types::SUI_FRAMEWORK_PACKAGE_ID;
 use sui_types::{
     base_types::ObjectID,
-    messages::{CallArg, CertifiedTransaction, ObjectArg, TransactionData},
     object::Object,
+    transaction::{CallArg, CertifiedTransaction, ObjectArg, TransactionData},
 };
 use tokio::sync::mpsc::channel;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -52,13 +52,19 @@ pub async fn test_certificates(authority: &AuthorityState) -> Vec<CertifiedTrans
         mutable: true,
     };
     for gas_object in test_gas_objects() {
+        // Object digest may be different in genesis than originally generated.
+        let gas_object = authority
+            .get_object(&gas_object.id())
+            .await
+            .unwrap()
+            .unwrap();
         // Make a sample transaction.
         let module = "object_basics";
         let function = "create";
 
         let data = TransactionData::new_move_call(
             sender,
-            SUI_FRAMEWORK_OBJECT_ID,
+            SUI_FRAMEWORK_PACKAGE_ID,
             ident_str!(module).to_owned(),
             ident_str!(function).to_owned(),
             /* type_args */ vec![],
@@ -74,7 +80,9 @@ pub async fn test_certificates(authority: &AuthorityState) -> Vec<CertifiedTrans
         )
         .unwrap();
 
-        let transaction = to_sender_signed_transaction(data, &keypair);
+        let transaction = authority
+            .verify_transaction(to_sender_signed_transaction(data, &keypair))
+            .unwrap();
 
         // Submit the transaction and assemble a certificate.
         let response = authority
@@ -115,7 +123,7 @@ async fn submit_transaction_to_consensus_adapter() {
             epoch_store: &Arc<AuthorityPerEpochStore>,
         ) -> SuiResult {
             epoch_store
-                .process_consensus_transactions(
+                .process_consensus_transactions_for_tests(
                     vec![VerifiedSequencedConsensusTransaction::new_test(
                         transaction.clone(),
                     )],
@@ -133,6 +141,8 @@ async fn submit_transaction_to_consensus_adapter() {
         Box::new(Arc::new(ConnectionMonitorStatusForTests {})),
         100_000,
         100_000,
+        None,
+        None,
         metrics,
     ));
 

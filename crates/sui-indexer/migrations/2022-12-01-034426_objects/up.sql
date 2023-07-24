@@ -39,6 +39,7 @@ CREATE TABLE objects
 CREATE INDEX objects_owner_address ON objects (owner_type, owner_address);
 CREATE INDEX objects_tx_digest ON objects (previous_transaction);
 
+-- NOTE(gegaowp): remove object history so that it will not be created over DB reset / migration run.
 CREATE TABLE objects_history
 (
     epoch                  BIGINT        NOT NULL,

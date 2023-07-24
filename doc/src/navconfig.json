@@ -1,10 +1,7 @@
 {
 	"sideMenu": {
 		"title": "QUICK LINKS",
-		"items": [{
-				"label": "Sui Migration Guide",
-				"link": "doc-updates/sui-migration-guide"
-			},
+		"items": [
 			{
 				"label": "Sui Doc Updates",
 				"link": "doc-updates"
@@ -113,22 +110,46 @@
 				"fileName": "learn/cryptography/index",
 				"title": "Sui Cryptography",
 				"items": [{
-						"label": "Sui Intent Signing",
-						"fileName": "learn/cryptography/sui-intent-signing"
+					"label": "Sui Keys and Addresses",
+					"fileName": "learn/cryptography/sui-wallet-specs"
 					},
 					{
-						"label": "Sui Offline Signing",
-						"fileName": "learn/cryptography/sui-offline-signing"
+						"label": "Sui Crypto Agility and Signatures",
+						"fileName": "learn/cryptography/sui-signatures"
 					},
 					{
 						"label": "Sui Multisig",
 						"fileName": "learn/cryptography/sui-multisig"
 					},
 					{
-						"label": "Sui Keys and Addresses",
-						"fileName": "learn/cryptography/sui-wallet-specs"
+						"label": "Sui Offline Signing",
+						"fileName": "learn/cryptography/sui-offline-signing"
+					},
+					{
+						"label": "Sui Intent Signing",
+						"fileName": "learn/cryptography/sui-intent-signing"
+					},
+					{
+						"label": "Signature schemes in Move contracts",
+						"fileName": "learn/cryptography/sui-move-signatures"
+					},
+					{
+						"label": "Hashing in Sui",
+						"fileName": "learn/cryptography/hashing"
+					},
+					{
+						"label": "Verifying Groth16 zk-SNARKs",
+						"fileName": "learn/cryptography/groth16"
+					},
+					{
+						"label": "Verifiable Random Function (VRF)",
+						"fileName": "learn/cryptography/ecvrf"
 					}
 				]
+			},
+			{
+				"label": "Sui Bridging",
+				"fileName": "learn/sui-bridging"
 			},
 			{
 				"label": "Sui Exchange Integration Guide",
@@ -141,7 +162,7 @@
 			},
 			{
 				"label": "Connect to a Sui Network",
-				"fileName": "build/devnet"
+				"fileName": "build/connect-sui-network"
 			},
 			{
 				"label": "Sui Client CLI",
@@ -162,6 +183,10 @@
 			{
 				"label": "Sui Object Display Standard",
 				"fileName": "build/sui-object-display"
+			},
+			{
+				"label": "Sui Kiosk",
+				"fileName": "build/sui-kiosk"
 			},
 			{
 				"label": "Create Smart Contracts with Move",
@@ -195,6 +220,14 @@
 					{
 						"label": "Upgrade Move Packages",
 						"fileName": "build/package-upgrades"
+					},
+					{
+						"label": "Custom Upgrade Policies",
+						"fileName": "build/custom-upgrade-policy"
+					},
+					{
+						"label": "Dependency Overrides",
+						"fileName": "build/dependency-overrides"
 					},
 					{
 						"label": "Sui Move Library",
@@ -271,6 +304,14 @@
 						"fileName": "build/event_api"
 					}
 				]
+			},
+			{
+				"label": "RPC Best Practices",
+				"fileName": "build/rpc-best-practices"
+			},
+			{
+				"label": "Developer Cheat Sheet",
+				"fileName": "build/dev_cheat_sheet"
 			}
 		],
 			"reference": [{
@@ -285,16 +326,13 @@
 			{
 				"label": "Sui Framework Reference",
 				"fileName": "reference/framework/index"
-			}
-		],
-		"explore": [{
-				"label": "Sui Explorer",
-				"fileName": "explore/sui-explorer"
 			},
 			{
-				"label": "Sui Wallet",
-				"fileName": "explore/wallet-browser"
-			},
+				"label": "Sui Partner Package Matrix",
+				"fileName": "reference/partner-matrix"
+			}
+		],
+		"explore": [
 			{
 				"label": "Tutorials",
 				"fileName": "explore/tutorials"
@@ -304,7 +342,8 @@
 				"fileName": "explore/examples"
 			}
 		],
-		"contribute": [{
+		"contribute": [
+			{
 				"label": "Frequently Asked Questions",
 				"fileName": "contribute/faq"
 			},

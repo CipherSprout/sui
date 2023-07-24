@@ -1,25 +1,25 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+import { isSuiNSName } from '@mysten/core';
 import { formatAddress } from '@mysten/sui.js';
 
 import ExplorerLink from '_components/explorer-link';
 import { ExplorerLinkType } from '_components/explorer-link/ExplorerLinkType';
 
 type TxnAddressLinkProps = {
-    address: string;
+	address: string;
 };
 
 export function TxnAddressLink({ address }: TxnAddressLinkProps) {
-    return (
-        <ExplorerLink
-            type={ExplorerLinkType.address}
-            address={address}
-            title="View on Sui Explorer"
-            className="text-sui-dark font-mono text-body font-semibold no-underline tracking-wider"
-            showIcon={false}
-        >
-            {formatAddress(address)}
-        </ExplorerLink>
-    );
+	return (
+		<ExplorerLink
+			type={ExplorerLinkType.address}
+			address={address}
+			title="View on Sui Explorer"
+			showIcon={false}
+		>
+			{isSuiNSName(address) ? address : formatAddress(address)}
+		</ExplorerLink>
+	);
 }

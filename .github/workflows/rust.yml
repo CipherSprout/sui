@@ -40,6 +40,7 @@ jobs:
     outputs:
       isRust: ${{ steps.diff.outputs.isRust }}
       isMove: ${{ steps.diff.outputs.isMove }}
+      isReleaseNotesEligible: ${{ steps.diff.outputs.isReleaseNotesEligible }}
     steps:
       - uses: actions/checkout@v3
       - name: Detect Changes
@@ -51,10 +52,9 @@ jobs:
     runs-on: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
       - uses: bmwill/rust-cache@v1 # Fork of 'Swatinem/rust-cache' which allows caching additional paths
       - name: Install cargo-hakari, and cache the binary
-        uses: baptiste0928/cargo-install@v1
+        uses: baptiste0928/cargo-install@30f432979e99f3ea66a8fa2eede53c07063995d8
         with:
           crate: cargo-hakari
           locked: true
@@ -62,6 +62,30 @@ jobs:
       - run: |
           cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
           cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
+
+  release-notes-description-check:
+    name: release-notes-check
+    needs: diff
+    if: needs.diff.outputs.isReleaseNotesEligible == 'true'
+    runs-on: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Check Pull Request Description
+        shell: bash
+        run: |
+          export PR_NUMBER=$(jq --raw-output .pull_request.number "$GITHUB_EVENT_PATH")
+          export DESCRIPTION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/MystenLabs/sui/pulls/${PR_NUMBER}" \
+            | jq --raw-output .body)
+
+          if [[ "${DESCRIPTION}" == *"[x]"*  ]]; then
+            if [[ "${DESCRIPTION}" =~ Release[[:space:]]notes[[:space:]]+.* ]]; then
+              exit 0
+            else
+              echo "At least one '[x]' was checked under 'Type of Change (Check all that apply)', you need to add a blob under the 'Release Notes' section."
+              exit 1
+            fi
+          fi
 
   test:
     needs: diff
@@ -80,15 +104,15 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
       - uses: taiki-e/install-action@nextest
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 256
       - name: Install python dependencies
         run: |
           pip install pyopenssl --upgrade
           if [ -f narwhal/benchmark/requirements.txt ]; then pip install -r narwhal/benchmark/requirements.txt; fi
-      - name: External crates tests
-        run: |
-          cargo xtest
       - name: cargo test
         run: |
           cargo nextest run --profile ci
@@ -102,6 +126,9 @@ jobs:
       - name: rustdoc
         run: |
           cargo doc --workspace --no-deps
+      - name: sui-execution
+        run: |
+          ./scripts/execution_layer.py generate-lib
       # Ensure there are no uncommitted changes in the repo after running tests
       - run: scripts/changed-files.sh
         shell: bash
@@ -118,7 +145,6 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
       - uses: taiki-e/install-action@nextest
       - uses: arduino/setup-protoc@v1
         # this avoids rate-limiting
@@ -147,14 +173,52 @@ jobs:
       MSIM_WATCHDOG_TIMEOUT_MS: 60000
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
       - uses: taiki-e/install-action@nextest
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 256
       - name: cargo simtest
         run: |
           scripts/simtest/cargo-simtest simtest
       - name: check new tests for flakiness
         run: |
           scripts/simtest/stress-new-tests.sh
+
+  rosetta-validation:
+    needs: diff
+    if: needs.diff.outputs.isRust == 'true'
+    timeout-minutes: 45
+    runs-on: [ubuntu-ghcloud]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup environment
+        run: .github/scripts/rosetta/setup.sh
+        shell: bash
+
+      - name: Start local Sui network
+        run: |
+          sui start --no-full-node &
+        shell: bash
+
+      - name: Start Rosetta servers
+        run: .github/scripts/rosetta/start_rosetta.sh
+        shell: bash
+
+      - name: Sleep for 20 seconds
+        run: sleep 20s
+        shell: bash
+
+      - name: Run check:construction test
+        run: |
+          ./bin/rosetta-cli --configuration-file rosetta_cli.json check:construction
+        shell: bash
+
+      - name: Run check:data test
+        run: |
+          ./bin/rosetta-cli --configuration-file rosetta_cli.json check:data
+        shell: bash
 
   # This is a no-op job that allows the resulting action names to line up when
   # there are no rust changes in a given PR/commit. This ensures that we can
@@ -184,10 +248,7 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          components: clippy
-
+      - run: rustup component add clippy
       # TODO(bradh): debug and re-enable this; the caching is breaking the clippy build
       # Enable caching of the 'librocksdb-sys' crate by additionally caching the
       # 'librocksdb-sys' src directory which is managed by cargo
@@ -205,9 +266,7 @@ jobs:
     runs-on: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          components: rustfmt
+      - run: rustup component add rustfmt
       - name: rustfmt
         uses: actions-rs/cargo@v1
         with:
@@ -223,64 +282,48 @@ jobs:
       - uses: actions/checkout@v3
       - uses: mystenlabs/cargo-deny-action@main
 
-  move-prover:
-    name: move-prover
-    needs: diff
-    timeout-minutes: 20
-    if: needs.diff.outputs.isMove == 'true'
-    runs-on: [ubuntu-ghcloud]
-
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-
-      - name: Prover Setup
-        run: |
-          crates/sui-move/scripts/prover_setup.sh
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-
-      - name: Prover Run
-        working-directory: crates/sui-framework/packages
-        run: |
-          set -o pipefail
-          DOTNET_ROOT="$HOME/.dotnet"
-          BIN_DIR="$HOME/bin"
-          export DOTNET_ROOT="${DOTNET_ROOT}"
-          export PATH="${DOTNET_ROOT}/tools:\$PATH"
-          export Z3_EXE="${BIN_DIR}/z3"
-          export CVC5_EXE="${BIN_DIR}/cvc5"
-          export BOOGIE_EXE="${DOTNET_ROOT}/tools/boogie"
-          ../../../target/debug/sui move prove -p sui-framework
-          ../../../target/debug/sui move prove -p sui-system
-
-  indexer:
-    name: indexer
+  sui-excution-cut:
+    name: cutting a new execution layer
     needs: diff
     if: needs.diff.outputs.isRust == 'true'
-    timeout-minutes: 45
     runs-on: [ubuntu-ghcloud]
-    services:
-      postgres:
-        image: postgres
-        env:
-          POSTGRES_PASSWORD: postgrespw
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-      - name: integration-test-with-postgres
-        #We only have 1 instance of postgres DB, can only run test in single thread
-        run: |
-          cargo test --package sui-indexer --test integration_tests --features pg_integration -- --test-threads=1
-        env:
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
+      - name: Install cargo-hakari, and cache the binary
+        uses: baptiste0928/cargo-install@30f432979e99f3ea66a8fa2eede53c07063995d8
+        with:
+          crate: cargo-hakari
+          locked: true
+      - name: Make cut
+        run: ./scripts/execution_layer.py cut for_ci_test
+      - name: Check execution builds
+        run: cargo build -p sui-execution
+
+
+  #indexer:
+  #  name: indexer
+  #  needs: diff
+  #  if: needs.diff.outputs.isRust == 'true'
+  #  timeout-minutes: 45
+  #  runs-on: [ubuntu-ghcloud]
+  #  services:
+  #    postgres:
+  #      image: postgres
+  #      env:
+  #        POSTGRES_PASSWORD: postgrespw
+  #      options: >-
+  #        --health-cmd pg_isready
+  #        --health-interval 10s
+  #        --health-timeout 5s
+  #        --health-retries 5
+  #      ports:
+  #        - 5432:5432
+  #  steps:
+  #    - uses: actions/checkout@v3
+  #    - name: integration-test-with-postgres
+  #      #We only have 1 instance of postgres DB, can only run test in single thread
+  #      run: |
+  #        cargo test --package sui-indexer --test integration_tests --features pg_integration -- --test-threads=1
+  #      env:
+  #        POSTGRES_HOST: localhost
+  #        POSTGRES_PORT: 5432

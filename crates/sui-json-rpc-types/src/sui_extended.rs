@@ -39,6 +39,7 @@ pub struct EpochInfo {
     #[serde_as(as = "BigInt<u64>")]
     pub epoch_start_timestamp: u64,
     pub end_of_epoch_info: Option<EndOfEpochInfo>,
+    pub reference_gas_price: Option<u64>,
 }
 
 #[serde_as]
@@ -143,4 +144,16 @@ pub struct MoveFunctionName {
     #[schemars(with = "String")]
     #[serde_as(as = "DisplayFromStr")]
     pub function: Identifier,
+}
+
+#[serde_as]
+#[derive(Serialize, Deserialize, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressMetrics {
+    pub checkpoint: u64,
+    pub epoch: u64,
+    pub timestamp_ms: u64,
+    pub cumulative_addresses: u64,
+    pub cumulative_active_addresses: u64,
+    pub daily_active_addresses: u64,
 }

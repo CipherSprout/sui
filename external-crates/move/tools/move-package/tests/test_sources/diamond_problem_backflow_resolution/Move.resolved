@@ -51,6 +51,7 @@ ResolvedGraph {
                 ),
                 version: None,
                 resolver: None,
+                overridden_path: false,
             },
             "B": Package {
                 kind: Local(
@@ -58,6 +59,7 @@ ResolvedGraph {
                 ),
                 version: None,
                 resolver: None,
+                overridden_path: false,
             },
             "C": Package {
                 kind: Local(
@@ -65,6 +67,7 @@ ResolvedGraph {
                 ),
                 version: None,
                 resolver: None,
+                overridden_path: false,
             },
         },
         always_deps: {
@@ -87,9 +90,10 @@ ResolvedGraph {
             "ELIDED_FOR_TEST",
         ),
         additional_named_addresses: {},
-        architecture: None,
         fetch_deps_only: false,
         skip_fetch_latest_git_deps: false,
+        default_flavor: None,
+        default_edition: None,
     },
     package_table: {
         "A": Package {
@@ -103,6 +107,8 @@ ResolvedGraph {
                     ),
                     authors: [],
                     license: None,
+                    edition: None,
+                    flavor: None,
                     custom_properties: {},
                 },
                 addresses: None,
@@ -123,6 +129,7 @@ ResolvedGraph {
                             ),
                             version: None,
                             digest: None,
+                            dep_override: false,
                         },
                     ),
                 },
@@ -151,6 +158,8 @@ ResolvedGraph {
                     ),
                     authors: [],
                     license: None,
+                    edition: None,
+                    flavor: None,
                     custom_properties: {},
                 },
                 addresses: None,
@@ -171,6 +180,7 @@ ResolvedGraph {
                             ),
                             version: None,
                             digest: None,
+                            dep_override: false,
                         },
                     ),
                 },
@@ -199,6 +209,8 @@ ResolvedGraph {
                     ),
                     authors: [],
                     license: None,
+                    edition: None,
+                    flavor: None,
                     custom_properties: {},
                 },
                 addresses: Some(
@@ -229,6 +241,8 @@ ResolvedGraph {
                     ),
                     authors: [],
                     license: None,
+                    edition: None,
+                    flavor: None,
                     custom_properties: {},
                 },
                 addresses: None,
@@ -238,17 +252,18 @@ ResolvedGraph {
                     "A": Internal(
                         InternalDependency {
                             kind: Local(
-                                "./deps_only/A",
+                                "deps_only/A",
                             ),
                             subst: None,
                             version: None,
                             digest: None,
+                            dep_override: false,
                         },
                     ),
                     "B": Internal(
                         InternalDependency {
                             kind: Local(
-                                "./deps_only/B",
+                                "deps_only/B",
                             ),
                             subst: Some(
                                 {
@@ -259,6 +274,7 @@ ResolvedGraph {
                             ),
                             version: None,
                             digest: None,
+                            dep_override: false,
                         },
                     ),
                 },

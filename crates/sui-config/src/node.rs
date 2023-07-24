@@ -1,8 +1,10 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::certificate_deny_config::CertificateDenyConfig;
 use crate::genesis;
 use crate::p2p::P2pConfig;
+use crate::transaction_deny_config::TransactionDenyConfig;
 use crate::Config;
 use anyhow::Result;
 use narwhal_config::Parameters as ConsensusParameters;
@@ -11,8 +13,10 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use std::usize;
 use sui_keys::keypair_file::{read_authority_keypair_from_file, read_keypair_from_file};
 use sui_protocol_config::SupportedProtocolVersions;
@@ -21,16 +25,16 @@ use sui_types::base_types::{ObjectID, SuiAddress};
 use sui_types::crypto::AuthorityPublicKeyBytes;
 use sui_types::crypto::KeypairTraits;
 use sui_types::crypto::NetworkKeyPair;
-use sui_types::crypto::NetworkPublicKey;
 use sui_types::crypto::SuiKeyPair;
 use sui_types::crypto::{get_key_pair_from_rng, AccountKeyPair, AuthorityKeyPair};
 use sui_types::multiaddr::Multiaddr;
+use tracing::info;
 
 // Default max number of concurrent requests served
 pub const DEFAULT_GRPC_CONCURRENCY_LIMIT: usize = 20000000000;
 
 /// Default gas price of 100 Mist
-pub const DEFAULT_VALIDATOR_GAS_PRICE: u64 = 1000;
+pub const DEFAULT_VALIDATOR_GAS_PRICE: u64 = sui_types::transaction::DEFAULT_VALIDATOR_GAS_PRICE;
 
 /// Default commission rate of 2%
 pub const DEFAULT_COMMISSION_RATE: u64 = 200;
@@ -111,7 +115,31 @@ pub struct NodeConfig {
     pub expensive_safety_check_config: ExpensiveSafetyCheckConfig,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name_service_resolver_object_id: Option<ObjectID>,
+    pub name_service_package_address: Option<SuiAddress>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_service_registry_id: Option<ObjectID>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_service_reverse_registry_id: Option<ObjectID>,
+
+    #[serde(default)]
+    pub transaction_deny_config: TransactionDenyConfig,
+
+    #[serde(default)]
+    pub certificate_deny_config: CertificateDenyConfig,
+
+    #[serde(default)]
+    pub state_debug_dump_config: StateDebugDumpConfig,
+
+    #[serde(default)]
+    pub state_archive_write_config: StateArchiveConfig,
+
+    #[serde(default)]
+    pub state_archive_read_config: Vec<StateArchiveConfig>,
+
+    #[serde(default)]
+    pub state_snapshot_write_config: StateSnapshotConfig,
 }
 
 fn default_authority_store_pruning_config() -> AuthorityStorePruningConfig {
@@ -207,6 +235,14 @@ impl NodeConfig {
         self.db_path.join("db_checkpoints")
     }
 
+    pub fn archive_path(&self) -> PathBuf {
+        self.db_path.join("archive")
+    }
+
+    pub fn snapshot_path(&self) -> PathBuf {
+        self.db_path.join("snapshot")
+    }
+
     pub fn network_address(&self) -> &Multiaddr {
         &self.network_address
     }
@@ -218,6 +254,27 @@ impl NodeConfig {
     pub fn genesis(&self) -> Result<&genesis::Genesis> {
         self.genesis.genesis()
     }
+
+    pub fn sui_address(&self) -> SuiAddress {
+        (&self.account_key_pair.keypair().public()).into()
+    }
+
+    pub fn archive_reader_config(&self) -> Vec<ArchiveReaderConfig> {
+        self.state_archive_read_config
+            .iter()
+            .flat_map(|config| {
+                config
+                    .object_store_config
+                    .as_ref()
+                    .map(|remote_store_config| ArchiveReaderConfig {
+                        remote_store_config: remote_store_config.clone(),
+                        download_concurrency: NonZeroUsize::new(config.concurrency)
+                            .unwrap_or(NonZeroUsize::new(5).unwrap()),
+                        use_for_pruning_watermark: config.use_for_pruning_watermark,
+                    })
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -226,15 +283,24 @@ pub struct ConsensusConfig {
     pub address: Multiaddr,
     pub db_path: PathBuf,
 
-    // Optional alternative address preferentially used by a primary to talk to its own worker.
-    // For example, this could be used to connect to co-located workers over a private LAN address.
+    /// Optional alternative address preferentially used by a primary to talk to its own worker.
+    /// For example, this could be used to connect to co-located workers over a private LAN address.
     pub internal_worker_address: Option<Multiaddr>,
 
-    // Maximum number of pending transactions to submit to consensus, including those
-    // in submission wait.
-    // Assuming 10_000 txn tps * 10 sec consensus latency = 100_000 inflight consensus txns,
-    // Default to 100_000.
+    /// Maximum number of pending transactions to submit to consensus, including those
+    /// in submission wait.
+    /// Assuming 10_000 txn tps * 10 sec consensus latency = 100_000 inflight consensus txns,
+    /// Default to 100_000.
     pub max_pending_transactions: Option<usize>,
+
+    /// When defined caps the calculated submission position to the max_submit_position. Even if the
+    /// is elected to submit from a higher position than this, it will "reset" to the max_submit_position.
+    pub max_submit_position: Option<usize>,
+
+    /// The submit delay step to consensus defined in milliseconds. When provided it will
+    /// override the current back off logic otherwise the default backoff logic will be applied based
+    /// on consensus latency estimates.
+    pub submit_delay_step_override_millis: Option<u64>,
 
     pub narwhal_config: ConsensusParameters,
 }
@@ -250,6 +316,11 @@ impl ConsensusConfig {
 
     pub fn max_pending_transactions(&self) -> usize {
         self.max_pending_transactions.unwrap_or(100_000)
+    }
+
+    pub fn submit_delay_step_override(&self) -> Option<Duration> {
+        self.submit_delay_step_override_millis
+            .map(Duration::from_millis)
     }
 
     pub fn narwhal_config(&self) -> &ConsensusParameters {
@@ -308,6 +379,9 @@ pub struct ExpensiveSafetyCheckConfig {
     /// against some (but not all) potential bugs in the bytecode verifier
     #[serde(default)]
     enable_move_vm_paranoid_checks: bool,
+
+    #[serde(default)]
+    enable_secondary_index_checks: bool,
     // TODO: Add more expensive checks here
 }
 
@@ -320,6 +394,19 @@ impl ExpensiveSafetyCheckConfig {
             enable_state_consistency_check: true,
             force_disable_state_consistency_check: false,
             enable_move_vm_paranoid_checks: true,
+            enable_secondary_index_checks: false, // Disable by default for now
+        }
+    }
+
+    pub fn new_disable_all() -> Self {
+        Self {
+            enable_epoch_sui_conservation_check: false,
+            enable_deep_per_tx_sui_conservation_check: false,
+            force_disable_epoch_sui_conservation_check: true,
+            enable_state_consistency_check: false,
+            force_disable_state_consistency_check: true,
+            enable_move_vm_paranoid_checks: false,
+            enable_secondary_index_checks: false,
         }
     }
 
@@ -351,6 +438,10 @@ impl ExpensiveSafetyCheckConfig {
 
     pub fn enable_deep_per_tx_sui_conservation_check(&self) -> bool {
         self.enable_deep_per_tx_sui_conservation_check || cfg!(debug_assertions)
+    }
+
+    pub fn enable_secondary_index_checks(&self) -> bool {
+        self.enable_secondary_index_checks
     }
 }
 
@@ -390,47 +481,83 @@ pub struct AuthorityStorePruningConfig {
     pub max_checkpoints_in_batch: usize,
     /// maximum number of transaction in the pruning batch
     pub max_transactions_in_batch: usize,
-    /// pruner deletion method. If set to `true`, range deletion is utilized (recommended).
-    /// Use `false` for point deletes.
-    pub use_range_deletion: bool,
+    /// enables periodic background compaction for old SST files whose last modified time is
+    /// older than `periodic_compaction_threshold_days` days.
+    /// That ensures that all sst files eventually go through the compaction process
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub periodic_compaction_threshold_days: Option<usize>,
+    /// number of epochs to keep the latest version of transactions and effects for
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_epochs_to_retain_for_checkpoints: Option<u64>,
 }
 
 impl Default for AuthorityStorePruningConfig {
     fn default() -> Self {
+        // TODO: Remove this after aggressive pruning is enabled by default
+        let num_epochs_to_retain = if cfg!(msim) { 0 } else { 2 };
+        let pruning_run_delay_seconds = if cfg!(msim) { Some(5) } else { None };
         Self {
             num_latest_epoch_dbs_to_retain: usize::MAX,
             epoch_db_pruning_period_secs: u64::MAX,
-            num_epochs_to_retain: 2,
-            pruning_run_delay_seconds: None,
-            max_checkpoints_in_batch: 200,
+            num_epochs_to_retain,
+            pruning_run_delay_seconds,
+            max_checkpoints_in_batch: 10,
             max_transactions_in_batch: 1000,
-            use_range_deletion: true,
+            periodic_compaction_threshold_days: None,
+            num_epochs_to_retain_for_checkpoints: None,
         }
     }
 }
 
 impl AuthorityStorePruningConfig {
     pub fn validator_config() -> Self {
+        // TODO: Remove this after aggressive pruning is enabled by default
+        let num_epochs_to_retain = if cfg!(msim) { 0 } else { 2 };
+        let pruning_run_delay_seconds = if cfg!(msim) { Some(2) } else { None };
+        let num_epochs_to_retain_for_checkpoints = if cfg!(msim) { Some(2) } else { None };
         Self {
             num_latest_epoch_dbs_to_retain: 3,
             epoch_db_pruning_period_secs: 60 * 60,
-            num_epochs_to_retain: 2,
-            pruning_run_delay_seconds: None,
-            max_checkpoints_in_batch: 200,
+            num_epochs_to_retain,
+            pruning_run_delay_seconds,
+            max_checkpoints_in_batch: 10,
             max_transactions_in_batch: 1000,
-            use_range_deletion: true,
+            periodic_compaction_threshold_days: None,
+            num_epochs_to_retain_for_checkpoints,
         }
     }
     pub fn fullnode_config() -> Self {
+        // TODO: Remove this after aggressive pruning is enabled by default
+        let num_epochs_to_retain = if cfg!(msim) { 0 } else { 2 };
+        let pruning_run_delay_seconds = if cfg!(msim) { Some(2) } else { None };
+        let num_epochs_to_retain_for_checkpoints = if cfg!(msim) { Some(2) } else { None };
         Self {
             num_latest_epoch_dbs_to_retain: 3,
             epoch_db_pruning_period_secs: 60 * 60,
-            num_epochs_to_retain: 2,
-            pruning_run_delay_seconds: None,
-            max_checkpoints_in_batch: 200,
+            num_epochs_to_retain,
+            pruning_run_delay_seconds,
+            max_checkpoints_in_batch: 10,
             max_transactions_in_batch: 1000,
-            use_range_deletion: true,
+            periodic_compaction_threshold_days: None,
+            num_epochs_to_retain_for_checkpoints,
         }
+    }
+
+    pub fn set_num_epochs_to_retain_for_checkpoints(&mut self, num_epochs_to_retain: Option<u64>) {
+        self.num_epochs_to_retain_for_checkpoints = num_epochs_to_retain;
+    }
+
+    pub fn num_epochs_to_retain_for_checkpoints(&self) -> Option<u64> {
+        self.num_epochs_to_retain_for_checkpoints
+            // if n less than 2, coerce to 2 and log
+            .map(|n| {
+                if n < 2 {
+                    info!("num_epochs_to_retain_for_checkpoints must be at least 2, rounding up from {}", n);
+                    2
+                } else {
+                    n
+                }
+            })
     }
 }
 
@@ -454,74 +581,32 @@ pub struct DBCheckpointConfig {
     pub object_store_config: Option<ObjectStoreConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub perform_index_db_checkpoints_at_epoch_end: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prune_and_compact_before_upload: Option<bool>,
 }
 
-/// Publicly known information about a validator
-/// TODO read most of this from on-chain
-#[serde_as]
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub struct ArchiveReaderConfig {
+    pub remote_store_config: ObjectStoreConfig,
+    pub download_concurrency: NonZeroUsize,
+    pub use_for_pruning_watermark: bool,
+}
+
+#[derive(Default, Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct ValidatorInfo {
-    pub name: String,
-    pub account_address: SuiAddress,
-    pub protocol_key: AuthorityPublicKeyBytes,
-    pub worker_key: NetworkPublicKey,
-    pub network_key: NetworkPublicKey,
-    pub gas_price: u64,
-    pub commission_rate: u64,
-    pub network_address: Multiaddr,
-    pub p2p_address: Multiaddr,
-    pub narwhal_primary_address: Multiaddr,
-    pub narwhal_worker_address: Multiaddr,
-    pub description: String,
-    pub image_url: String,
-    pub project_url: String,
+pub struct StateArchiveConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_store_config: Option<ObjectStoreConfig>,
+    pub concurrency: usize,
+    pub use_for_pruning_watermark: bool,
 }
 
-impl ValidatorInfo {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn sui_address(&self) -> SuiAddress {
-        self.account_address
-    }
-
-    pub fn protocol_key(&self) -> AuthorityPublicKeyBytes {
-        self.protocol_key
-    }
-
-    pub fn worker_key(&self) -> &NetworkPublicKey {
-        &self.worker_key
-    }
-
-    pub fn network_key(&self) -> &NetworkPublicKey {
-        &self.network_key
-    }
-
-    pub fn gas_price(&self) -> u64 {
-        self.gas_price
-    }
-
-    pub fn commission_rate(&self) -> u64 {
-        self.commission_rate
-    }
-
-    pub fn network_address(&self) -> &Multiaddr {
-        &self.network_address
-    }
-
-    pub fn narwhal_primary_address(&self) -> &Multiaddr {
-        &self.narwhal_primary_address
-    }
-
-    pub fn narwhal_worker_address(&self) -> &Multiaddr {
-        &self.narwhal_worker_address
-    }
-
-    pub fn p2p_address(&self) -> &Multiaddr {
-        &self.p2p_address
-    }
+#[derive(Default, Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct StateSnapshotConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_store_config: Option<ObjectStoreConfig>,
+    pub concurrency: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Eq)]
@@ -702,6 +787,15 @@ impl AuthorityKeyPairWithPath {
     }
 }
 
+/// Configurations which determine how we dump state debug info.
+/// Debug info is dumped when a node forks.
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct StateDebugDumpConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dump_file_directory: Option<PathBuf>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -715,56 +809,13 @@ mod tests {
     use crate::NodeConfig;
 
     #[test]
-    fn serialize_genesis_config_from_file() {
+    fn serialize_genesis_from_file() {
         let g = Genesis::new_from_file("path/to/file");
 
         let s = serde_yaml::to_string(&g).unwrap();
         assert_eq!("---\ngenesis-file-location: path/to/file\n", s);
         let loaded_genesis: Genesis = serde_yaml::from_str(&s).unwrap();
         assert_eq!(g, loaded_genesis);
-    }
-
-    #[test]
-    fn serialize_genesis_config_in_place() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let network_config = crate::builder::ConfigBuilder::new(&dir).build();
-        let genesis = network_config.genesis;
-
-        let g = Genesis::new(genesis);
-
-        let mut s = serde_yaml::to_string(&g).unwrap();
-        let loaded_genesis: Genesis = serde_yaml::from_str(&s).unwrap();
-        loaded_genesis
-            .genesis()
-            .unwrap()
-            .checkpoint_contents()
-            .digest(); // cache digest before comparing.
-        assert_eq!(g, loaded_genesis);
-
-        // If both in-place and file location are provided, prefer the in-place variant
-        s.push_str("\ngenesis-file-location: path/to/file");
-        let loaded_genesis: Genesis = serde_yaml::from_str(&s).unwrap();
-        loaded_genesis
-            .genesis()
-            .unwrap()
-            .checkpoint_contents()
-            .digest(); // cache digest before comparing.
-        assert_eq!(g, loaded_genesis);
-    }
-
-    #[test]
-    fn load_genesis_config_from_file() {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let genesis_config = Genesis::new_from_file(file.path());
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let network_config = crate::builder::ConfigBuilder::new(&dir).build();
-        let genesis = network_config.genesis;
-        genesis.save(file.path()).unwrap();
-
-        let loaded_genesis = genesis_config.genesis().unwrap();
-        loaded_genesis.checkpoint_contents().digest(); // cache digest before comparing.
-        assert_eq!(&genesis, loaded_genesis);
     }
 
     #[test]

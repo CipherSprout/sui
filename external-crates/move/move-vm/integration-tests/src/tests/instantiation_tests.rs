@@ -23,6 +23,8 @@ use move_core_types::{
     language_storage::{ModuleId, StructTag, TypeTag},
     vm_status::StatusCode,
 };
+#[cfg(debug_assertions)]
+use move_vm_profiler::GasProfiler;
 use move_vm_runtime::{
     move_vm::MoveVM,
     session::{SerializedReturnValues, Session},
@@ -31,6 +33,8 @@ use move_vm_test_utils::{
     gas_schedule::{Gas, GasStatus, INITIAL_COST_SCHEDULE},
     InMemoryStorage,
 };
+#[cfg(debug_assertions)]
+use move_vm_types::gas::GasMeter;
 use std::time::Instant;
 
 const MODULE_NAME: &str = "Mod";
@@ -576,7 +580,7 @@ fn make_module(
     };
     // uncomment to see the module generated
     // println!("Module: {:#?}", module);
-    move_bytecode_verifier::verify_module(&module).expect("verification failed");
+    move_bytecode_verifier::verify_module_unmetered(&module).expect("verification failed");
 
     let mut mod_bytes = vec![];
     module
@@ -617,6 +621,12 @@ fn run_with_module(
         .map(|tag| session.load_type(&tag))
         .collect::<VMResult<Vec<_>>>();
 
+    #[cfg(debug_assertions)]
+    gas.set_profiler(GasProfiler::init(
+        &session.vm_config().profiler_config,
+        entry_name.to_string(),
+        gas.remaining_gas().into(),
+    ));
     let res = type_args.and_then(|type_args| {
         session.execute_entry_function(
             &module_id,

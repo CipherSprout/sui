@@ -17,8 +17,8 @@ use sui_sdk::rpc_types::SuiExecutionStatus;
 use sui_types::base_types::SuiAddress;
 use sui_types::crypto::{DefaultHash, SignatureScheme, ToFromBytes};
 use sui_types::error::SuiError;
-use sui_types::messages::{Transaction, TransactionData, TransactionDataAPI};
-use sui_types::signature::GenericSignature;
+use sui_types::signature::{GenericSignature, VerifyParams};
+use sui_types::transaction::{Transaction, TransactionData, TransactionDataAPI};
 
 use crate::errors::Error;
 use crate::types::{
@@ -112,7 +112,7 @@ pub async fn combine(
             &[&*flag, &*sig_bytes, &*pub_key].concat(),
         )?],
     );
-    signed_tx.verify_signature()?;
+    signed_tx.verify_signature(&VerifyParams::default())?;
     let signed_tx_bytes = bcs::to_bytes(&signed_tx)?;
 
     Ok(ConstructionCombineResponse {
@@ -130,11 +130,10 @@ pub async fn submit(
 ) -> Result<TransactionIdentifierResponse, Error> {
     env.check_network_identifier(&request.network_identifier)?;
     let signed_tx: Transaction = bcs::from_bytes(&request.signed_transaction.to_vec()?)?;
-    let signed_tx = signed_tx.verify()?;
 
     let response = context
         .client
-        .quorum_driver()
+        .quorum_driver_api()
         .execute_transaction_block(
             signed_tx,
             SuiTransactionBlockResponseOptions::new()
@@ -210,19 +209,21 @@ pub async fn metadata(
     env.check_network_identifier(&request.network_identifier)?;
     let option = request.options.ok_or(Error::MissingMetadata)?;
     let sender = option.internal_operation.sender();
-    let gas_price = context
+    let mut gas_price = context
         .client
         .governance_api()
         .get_reference_gas_price()
         .await?;
+    // make sure it works over epoch changes
+    gas_price += 100;
 
-    // Get sender, amount, and rough budget for the operation
-    let (total_required_amount, objects, budget) = match &option.internal_operation {
+    // Get amount, objects, for the operation
+    let (total_required_amount, objects) = match &option.internal_operation {
         InternalOperation::PaySui { amounts, .. } => {
             let amount = amounts.iter().sum::<u64>();
-            (Some(amount), vec![], 5_000_000)
+            (Some(amount), vec![])
         }
-        InternalOperation::Stake { amount, .. } => (*amount, vec![], 100_000_000),
+        InternalOperation::Stake { amount, .. } => (*amount, vec![]),
         InternalOperation::WithdrawStake { sender, stake_ids } => {
             let stake_ids = if stake_ids.is_empty() {
                 // unstake all
@@ -261,22 +262,52 @@ pub async fn metadata(
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(SuiError::from)?;
 
-            (Some(0), stake_refs, 100_000_000)
+            (Some(0), stake_refs)
         }
     };
 
+    // Dry run the transaction to get the gas used, amount doesn't really matter here when using mock coins.
+    // get gas estimation from dry-run, this will also return any tx error.
+    let data = option
+        .internal_operation
+        .try_into_data(ConstructionMetadata {
+            sender,
+            coins: vec![],
+            objects: objects.clone(),
+            // Mock coin have 1B SUI
+            total_coin_value: 1_000_000_000 * 1_000_000_000,
+            gas_price,
+            // MAX BUDGET
+            budget: 50_000_000_000,
+        })?;
+
+    let dry_run = context
+        .client
+        .read_api()
+        .dry_run_transaction_block(data)
+        .await?;
+    let effects = dry_run.effects;
+
+    if let SuiExecutionStatus::Failure { error } = effects.status() {
+        return Err(Error::TransactionDryRunError(error.to_string()));
+    }
+
+    let budget =
+        effects.gas_cost_summary().computation_cost + effects.gas_cost_summary().storage_cost;
+
     // Try select coins for required amounts
     let coins = if let Some(amount) = total_required_amount {
-        let total_amount = amount + (budget * gas_price);
+        let total_amount = amount + budget;
         context
             .client
             .coin_read_api()
-            .select_coins(sender, None, total_amount.into(), None, vec![])
+            .select_coins(sender, None, total_amount.into(), vec![])
             .await
             .ok()
     } else {
         None
     };
+
     // If required amount is None (all SUI) or failed to select coin (might not have enough SUI), select all coins.
     let coins = if let Some(coins) = coins {
         coins
@@ -295,32 +326,6 @@ pub async fn metadata(
         .into_iter()
         .map(|c| c.object_ref())
         .collect::<Vec<_>>();
-
-    // get gas estimation from dry-run, this will also return any tx error.
-    let data = option
-        .internal_operation
-        .try_into_data(ConstructionMetadata {
-            sender,
-            coins: coins.clone(),
-            objects: objects.clone(),
-            total_coin_value,
-            gas_price,
-            budget: budget * gas_price,
-        })?;
-
-    let dry_run = context
-        .client
-        .read_api()
-        .dry_run_transaction_block(data)
-        .await?;
-    let effects = dry_run.effects;
-
-    if let SuiExecutionStatus::Failure { error } = effects.status() {
-        return Err(Error::TransactionDryRunError(error.to_string()));
-    }
-
-    let budget =
-        effects.gas_cost_summary().computation_cost + effects.gas_cost_summary().storage_cost;
 
     Ok(ConstructionMetadataResponse {
         metadata: ConstructionMetadata {

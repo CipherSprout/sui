@@ -85,6 +85,7 @@
 -  [Function `effectuate_staged_metadata`](#0x3_validator_effectuate_staged_metadata)
 -  [Function `validate_metadata`](#0x3_validator_validate_metadata)
 -  [Function `validate_metadata_bcs`](#0x3_validator_validate_metadata_bcs)
+-  [Function `get_staking_pool_ref`](#0x3_validator_get_staking_pool_ref)
 -  [Function `new_from_metadata`](#0x3_validator_new_from_metadata)
 
 
@@ -97,6 +98,7 @@
 <b>use</b> <a href="../../../.././build/Sui/docs/event.md#0x2_event">0x2::event</a>;
 <b>use</b> <a href="../../../.././build/Sui/docs/object.md#0x2_object">0x2::object</a>;
 <b>use</b> <a href="../../../.././build/Sui/docs/sui.md#0x2_sui">0x2::sui</a>;
+<b>use</b> <a href="../../../.././build/Sui/docs/transfer.md#0x2_transfer">0x2::transfer</a>;
 <b>use</b> <a href="../../../.././build/Sui/docs/tx_context.md#0x2_tx_context">0x2::tx_context</a>;
 <b>use</b> <a href="../../../.././build/Sui/docs/url.md#0x2_url">0x2::url</a>;
 <b>use</b> <a href="staking_pool.md#0x3_staking_pool">0x3::staking_pool</a>;
@@ -485,6 +487,16 @@ Commission rate set by the validator is higher than the threshold
 
 
 
+<a name="0x3_validator_EGasPriceHigherThanThreshold"></a>
+
+Validator trying to set gas price higher than threshold.
+
+
+<pre><code><b>const</b> <a href="validator.md#0x3_validator_EGasPriceHigherThanThreshold">EGasPriceHigherThanThreshold</a>: u64 = 102;
+</code></pre>
+
+
+
 <a name="0x3_validator_EInvalidCap"></a>
 
 Capability code is not valid
@@ -619,7 +631,17 @@ Validator Metadata is too long
 
 
 
-<pre><code><b>const</b> <a href="validator.md#0x3_validator_MAX_COMMISSION_RATE">MAX_COMMISSION_RATE</a>: u64 = 10000;
+<pre><code><b>const</b> <a href="validator.md#0x3_validator_MAX_COMMISSION_RATE">MAX_COMMISSION_RATE</a>: u64 = 2000;
+</code></pre>
+
+
+
+<a name="0x3_validator_MAX_VALIDATOR_GAS_PRICE"></a>
+
+Max gas price a validator can set is 100K MIST.
+
+
+<pre><code><b>const</b> <a href="validator.md#0x3_validator_MAX_VALIDATOR_GAS_PRICE">MAX_VALIDATOR_GAS_PRICE</a>: u64 = 100000;
 </code></pre>
 
 
@@ -741,6 +763,7 @@ Validator Metadata is too long
         <a href="validator.md#0x3_validator_EValidatorMetadataExceedingLengthLimit">EValidatorMetadataExceedingLengthLimit</a>
     );
     <b>assert</b>!(<a href="validator.md#0x3_validator_commission_rate">commission_rate</a> &lt;= <a href="validator.md#0x3_validator_MAX_COMMISSION_RATE">MAX_COMMISSION_RATE</a>, <a href="validator.md#0x3_validator_ECommissionRateTooHigh">ECommissionRateTooHigh</a>);
+    <b>assert</b>!(<a href="validator.md#0x3_validator_gas_price">gas_price</a> &lt; <a href="validator.md#0x3_validator_MAX_VALIDATOR_GAS_PRICE">MAX_VALIDATOR_GAS_PRICE</a>, <a href="validator.md#0x3_validator_EGasPriceHigherThanThreshold">EGasPriceHigherThanThreshold</a>);
 
     <b>let</b> metadata = <a href="validator.md#0x3_validator_new_metadata">new_metadata</a>(
         sui_address,
@@ -857,7 +880,7 @@ Process pending stake and pending withdraws, and update the gas price.
 Request to add stake to the validator's staking pool, processed at the end of the epoch.
 
 
-<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="validator.md#0x3_validator_request_add_stake">request_add_stake</a>(self: &<b>mut</b> <a href="validator.md#0x3_validator_Validator">validator::Validator</a>, stake: <a href="../../../.././build/Sui/docs/balance.md#0x2_balance_Balance">balance::Balance</a>&lt;<a href="../../../.././build/Sui/docs/sui.md#0x2_sui_SUI">sui::SUI</a>&gt;, staker_address: <b>address</b>, ctx: &<b>mut</b> <a href="../../../.././build/Sui/docs/tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>)
+<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="validator.md#0x3_validator_request_add_stake">request_add_stake</a>(self: &<b>mut</b> <a href="validator.md#0x3_validator_Validator">validator::Validator</a>, stake: <a href="../../../.././build/Sui/docs/balance.md#0x2_balance_Balance">balance::Balance</a>&lt;<a href="../../../.././build/Sui/docs/sui.md#0x2_sui_SUI">sui::SUI</a>&gt;, staker_address: <b>address</b>, ctx: &<b>mut</b> <a href="../../../.././build/Sui/docs/tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>): <a href="staking_pool.md#0x3_staking_pool_StakedSui">staking_pool::StakedSui</a>
 </code></pre>
 
 
@@ -871,12 +894,12 @@ Request to add stake to the validator's staking pool, processed at the end of th
     stake: Balance&lt;SUI&gt;,
     staker_address: <b>address</b>,
     ctx: &<b>mut</b> TxContext,
-) {
+) : StakedSui {
     <b>let</b> stake_amount = <a href="../../../.././build/Sui/docs/balance.md#0x2_balance_value">balance::value</a>(&stake);
     <b>assert</b>!(stake_amount &gt; 0, <a href="validator.md#0x3_validator_EInvalidStakeAmount">EInvalidStakeAmount</a>);
     <b>let</b> stake_epoch = <a href="../../../.././build/Sui/docs/tx_context.md#0x2_tx_context_epoch">tx_context::epoch</a>(ctx) + 1;
-    <a href="staking_pool.md#0x3_staking_pool_request_add_stake">staking_pool::request_add_stake</a>(
-        &<b>mut</b> self.<a href="staking_pool.md#0x3_staking_pool">staking_pool</a>, stake, staker_address, stake_epoch, ctx
+    <b>let</b> staked_sui = <a href="staking_pool.md#0x3_staking_pool_request_add_stake">staking_pool::request_add_stake</a>(
+        &<b>mut</b> self.<a href="staking_pool.md#0x3_staking_pool">staking_pool</a>, stake, stake_epoch, ctx
     );
     // Process stake right away <b>if</b> staking pool is preactive.
     <b>if</b> (<a href="staking_pool.md#0x3_staking_pool_is_preactive">staking_pool::is_preactive</a>(&self.<a href="staking_pool.md#0x3_staking_pool">staking_pool</a>)) {
@@ -892,6 +915,7 @@ Request to add stake to the validator's staking pool, processed at the end of th
             amount: stake_amount,
         }
     );
+    staked_sui
 }
 </code></pre>
 
@@ -925,13 +949,14 @@ Request to add stake to the validator's staking pool at genesis
     <b>let</b> stake_amount = <a href="../../../.././build/Sui/docs/balance.md#0x2_balance_value">balance::value</a>(&stake);
     <b>assert</b>!(stake_amount &gt; 0, <a href="validator.md#0x3_validator_EInvalidStakeAmount">EInvalidStakeAmount</a>);
 
-    <a href="staking_pool.md#0x3_staking_pool_request_add_stake">staking_pool::request_add_stake</a>(
+    <b>let</b> staked_sui = <a href="staking_pool.md#0x3_staking_pool_request_add_stake">staking_pool::request_add_stake</a>(
         &<b>mut</b> self.<a href="staking_pool.md#0x3_staking_pool">staking_pool</a>,
         stake,
-        staker_address,
         0, // epoch 0 -- <a href="genesis.md#0x3_genesis">genesis</a>
         ctx
     );
+
+    <a href="../../../.././build/Sui/docs/transfer.md#0x2_transfer_public_transfer">transfer::public_transfer</a>(staked_sui, staker_address);
 
     // Process stake right away
     <a href="staking_pool.md#0x3_staking_pool_process_pending_stake">staking_pool::process_pending_stake</a>(&<b>mut</b> self.<a href="staking_pool.md#0x3_staking_pool">staking_pool</a>);
@@ -950,7 +975,7 @@ Request to add stake to the validator's staking pool at genesis
 Request to withdraw stake from the validator's staking pool, processed at the end of the epoch.
 
 
-<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="validator.md#0x3_validator_request_withdraw_stake">request_withdraw_stake</a>(self: &<b>mut</b> <a href="validator.md#0x3_validator_Validator">validator::Validator</a>, staked_sui: <a href="staking_pool.md#0x3_staking_pool_StakedSui">staking_pool::StakedSui</a>, ctx: &<b>mut</b> <a href="../../../.././build/Sui/docs/tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>)
+<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="validator.md#0x3_validator_request_withdraw_stake">request_withdraw_stake</a>(self: &<b>mut</b> <a href="validator.md#0x3_validator_Validator">validator::Validator</a>, staked_sui: <a href="staking_pool.md#0x3_staking_pool_StakedSui">staking_pool::StakedSui</a>, ctx: &<b>mut</b> <a href="../../../.././build/Sui/docs/tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>): <a href="../../../.././build/Sui/docs/balance.md#0x2_balance_Balance">balance::Balance</a>&lt;<a href="../../../.././build/Sui/docs/sui.md#0x2_sui_SUI">sui::SUI</a>&gt;
 </code></pre>
 
 
@@ -963,11 +988,12 @@ Request to withdraw stake from the validator's staking pool, processed at the en
     self: &<b>mut</b> <a href="validator.md#0x3_validator_Validator">Validator</a>,
     staked_sui: StakedSui,
     ctx: &<b>mut</b> TxContext,
-) {
+) : Balance&lt;SUI&gt; {
     <b>let</b> principal_amount = <a href="staking_pool.md#0x3_staking_pool_staked_sui_amount">staking_pool::staked_sui_amount</a>(&staked_sui);
     <b>let</b> stake_activation_epoch = <a href="staking_pool.md#0x3_staking_pool_stake_activation_epoch">staking_pool::stake_activation_epoch</a>(&staked_sui);
-    <b>let</b> withdraw_amount = <a href="staking_pool.md#0x3_staking_pool_request_withdraw_stake">staking_pool::request_withdraw_stake</a>(
+    <b>let</b> withdrawn_stake = <a href="staking_pool.md#0x3_staking_pool_request_withdraw_stake">staking_pool::request_withdraw_stake</a>(
             &<b>mut</b> self.<a href="staking_pool.md#0x3_staking_pool">staking_pool</a>, staked_sui, ctx);
+    <b>let</b> withdraw_amount = <a href="../../../.././build/Sui/docs/balance.md#0x2_balance_value">balance::value</a>(&withdrawn_stake);
     <b>let</b> reward_amount = withdraw_amount - principal_amount;
     self.next_epoch_stake = self.next_epoch_stake - withdraw_amount;
     <a href="../../../.././build/Sui/docs/event.md#0x2_event_emit">event::emit</a>(
@@ -980,7 +1006,8 @@ Request to withdraw stake from the validator's staking pool, processed at the en
             principal_amount,
             reward_amount,
         }
-    )
+    );
+    withdrawn_stake
 }
 </code></pre>
 
@@ -1010,6 +1037,7 @@ Need to present a <code>ValidatorOperationCap</code>.
     verified_cap: ValidatorOperationCap,
     new_price: u64,
 ) {
+    <b>assert</b>!(new_price &lt; <a href="validator.md#0x3_validator_MAX_VALIDATOR_GAS_PRICE">MAX_VALIDATOR_GAS_PRICE</a>, <a href="validator.md#0x3_validator_EGasPriceHigherThanThreshold">EGasPriceHigherThanThreshold</a>);
     <b>let</b> validator_address = *<a href="validator_cap.md#0x3_validator_cap_verified_operation_cap_address">validator_cap::verified_operation_cap_address</a>(&verified_cap);
     <b>assert</b>!(validator_address == self.metadata.sui_address, <a href="validator.md#0x3_validator_EInvalidCap">EInvalidCap</a>);
     self.next_epoch_gas_price = new_price;
@@ -1042,6 +1070,7 @@ Set new gas price for the candidate validator.
     new_price: u64
 ) {
     <b>assert</b>!(<a href="validator.md#0x3_validator_is_preactive">is_preactive</a>(self), <a href="validator.md#0x3_validator_ENotValidatorCandidate">ENotValidatorCandidate</a>);
+    <b>assert</b>!(new_price &lt; <a href="validator.md#0x3_validator_MAX_VALIDATOR_GAS_PRICE">MAX_VALIDATOR_GAS_PRICE</a>, <a href="validator.md#0x3_validator_EGasPriceHigherThanThreshold">EGasPriceHigherThanThreshold</a>);
     <b>let</b> validator_address = *<a href="validator_cap.md#0x3_validator_cap_verified_operation_cap_address">validator_cap::verified_operation_cap_address</a>(&verified_cap);
     <b>assert</b>!(validator_address == self.metadata.sui_address, <a href="validator.md#0x3_validator_EInvalidCap">EInvalidCap</a>);
     self.next_epoch_gas_price = new_price;
@@ -2828,6 +2857,30 @@ Aborts if validator metadata is valid
 
 <pre><code><b>pragma</b> opaque;
 <b>aborts_if</b> [abstract] <b>true</b>;
+</code></pre>
+
+
+
+</details>
+
+<a name="0x3_validator_get_staking_pool_ref"></a>
+
+## Function `get_staking_pool_ref`
+
+
+
+<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="validator.md#0x3_validator_get_staking_pool_ref">get_staking_pool_ref</a>(self: &<a href="validator.md#0x3_validator_Validator">validator::Validator</a>): &<a href="staking_pool.md#0x3_staking_pool_StakingPool">staking_pool::StakingPool</a>
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="validator.md#0x3_validator_get_staking_pool_ref">get_staking_pool_ref</a>(self: &<a href="validator.md#0x3_validator_Validator">Validator</a>) : &StakingPool {
+    &self.<a href="staking_pool.md#0x3_staking_pool">staking_pool</a>
+}
 </code></pre>
 
 

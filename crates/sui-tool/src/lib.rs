@@ -3,43 +3,91 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use fastcrypto::traits::ToFromBytes;
 use futures::future::join_all;
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use std::{fs, io};
 use sui_config::{genesis::Genesis, NodeConfig};
 use sui_core::authority_client::{AuthorityAPI, NetworkAuthorityClient};
 use sui_network::default_mysten_network_config;
+use sui_sdk::SuiClientBuilder;
+use sui_types::crypto::AuthorityPublicKeyBytes;
 use sui_types::multiaddr::Multiaddr;
 use sui_types::object::ObjectFormatOptions;
-use sui_types::{base_types::*, messages::*, object::Owner};
+use sui_types::{base_types::*, object::Owner};
 use tokio::time::Instant;
 
 use anyhow::anyhow;
+use eyre::ContextCompat;
+use indicatif::{ProgressBar, ProgressStyle};
+use prometheus::Registry;
+use sui_archival::reader::{ArchiveReader, ArchiveReaderMetrics};
+use sui_archival::{verify_archive_with_checksums, verify_archive_with_genesis_config};
+use sui_config::node::ArchiveReaderConfig;
+use sui_core::authority::authority_store_tables::AuthorityPerpetualTables;
+use sui_core::authority::AuthorityStore;
+use sui_core::checkpoints::CheckpointStore;
+use sui_core::epoch::committee_store::CommitteeStore;
+use sui_core::storage::RocksDbStore;
+use sui_storage::object_store::ObjectStoreConfig;
+use sui_types::messages_grpc::{
+    ObjectInfoRequest, ObjectInfoRequestKind, ObjectInfoResponse, TransactionInfoRequest,
+    TransactionStatus,
+};
+use tracing::info;
+use typed_store::rocks::MetricConf;
 
 pub mod commands;
 pub mod db_tool;
-pub mod replay;
 
-fn make_clients(
-    genesis: PathBuf,
+// This functions requires at least one of genesis or fullnode_rpc to be `Some`.
+async fn make_clients(
+    genesis: Option<PathBuf>,
+    fullnode_rpc: Option<String>,
 ) -> Result<BTreeMap<AuthorityName, (Multiaddr, NetworkAuthorityClient)>> {
-    let net_config = default_mysten_network_config();
-
-    let genesis = Genesis::load(genesis)?;
-
+    let mut net_config = default_mysten_network_config();
+    net_config.connect_timeout = Some(Duration::from_secs(5));
     let mut authority_clients = BTreeMap::new();
 
-    for validator in genesis.validator_set_for_tooling() {
-        let metadata = validator.verified_metadata();
-        let channel = net_config
-            .connect_lazy(&metadata.net_address)
-            .map_err(|err| anyhow!(err.to_string()))?;
-        let client = NetworkAuthorityClient::new(channel);
-        let public_key_bytes = metadata.sui_pubkey_bytes();
-        authority_clients.insert(public_key_bytes, (metadata.net_address.clone(), client));
+    if let Some(fullnode_rpc) = fullnode_rpc {
+        let sui_client = SuiClientBuilder::default().build(fullnode_rpc).await?;
+        let active_validators = sui_client
+            .governance_api()
+            .get_latest_sui_system_state()
+            .await?
+            .active_validators;
+
+        for validator in active_validators {
+            let net_addr = Multiaddr::try_from(validator.net_address).unwrap();
+            let channel = net_config
+                .connect_lazy(&net_addr)
+                .map_err(|err| anyhow!(err.to_string()))?;
+            let client = NetworkAuthorityClient::new(channel);
+            let public_key_bytes =
+                AuthorityPublicKeyBytes::from_bytes(&validator.protocol_pubkey_bytes)?;
+            authority_clients.insert(public_key_bytes, (net_addr.clone(), client));
+        }
+    } else {
+        if genesis.is_none() {
+            return Err(anyhow!("Either genesis or fullnode_rpc must be specified"));
+        }
+        let genesis = Genesis::load(genesis.unwrap())?;
+        for validator in genesis.validator_set_for_tooling() {
+            let metadata = validator.verified_metadata();
+            let channel = net_config
+                .connect_lazy(&metadata.net_address)
+                .map_err(|err| anyhow!(err.to_string()))?;
+            let client = NetworkAuthorityClient::new(channel);
+            let public_key_bytes = metadata.sui_pubkey_bytes();
+            authority_clients.insert(public_key_bytes, (metadata.net_address.clone(), client));
+        }
     }
 
     Ok(authority_clients)
@@ -115,14 +163,24 @@ impl std::fmt::Display for GroupedObjectOutput {
             .iter()
             .flat_map(|(name, multiaddr, resp)| {
                 resp.iter().map(|(seq_num, r, timespent)| {
-                    (*name, multiaddr.clone(), seq_num, r, timespent)
+                    (
+                        *name,
+                        multiaddr.clone(),
+                        seq_num,
+                        r,
+                        timespent,
+                        r.as_ref().err(),
+                    )
                 })
             })
-            .sorted_by(|a, b| Ord::cmp(&b.2, &a.2))
-            .group_by(|(_, _, seq_num, _r, _ts)| **seq_num);
+            .sorted_by(|a, b| {
+                Ord::cmp(&b.2, &a.2)
+                    .then_with(|| Ord::cmp(&format!("{:?}", &b.5), &format!("{:?}", &a.5)))
+            })
+            .group_by(|(_, _, seq_num, _r, _ts, _)| **seq_num);
         for (seq_num, group) in &responses {
             writeln!(f, "seq num: {}", seq_num.opt_debug("latest-seq-num"))?;
-            let cur_version_resp = group.group_by(|(_, _, _, r, _)| match r {
+            let cur_version_resp = group.group_by(|(_, _, _, r, _, _)| match r {
                 Ok(result) => {
                     let parent_tx_digest = result.object.previous_transaction;
                     let obj_digest = result.object.compute_object_reference().2;
@@ -143,32 +201,33 @@ impl std::fmt::Display for GroupedObjectOutput {
                         writeln!(f, "parent tx: {parent_tx_digest}")?;
                         writeln!(f, "owner: {owner}")?;
                         writeln!(f, "lock: {lock}")?;
-                        for (i, (name, multiaddr, _, _, timespent)) in group.enumerate() {
+                        for (i, (name, multiaddr, _, _, timespent, _)) in group.enumerate() {
                             writeln!(
                                 f,
-                                "        {:<4} {:<66} {:<56} (using {:.3} seconds)",
+                                "        {:<4} {:<20} {:<56} ({:.3}s)",
                                 i,
-                                name,
+                                name.concise(),
                                 format!("{}", multiaddr),
                                 timespent
                             )?;
                         }
                     }
                     None => {
-                        writeln!(f, " error")?;
-                        for (i, (name, multiaddr, _, resp, timespent)) in group.enumerate() {
+                        writeln!(f, "ERROR")?;
+                        for (i, (name, multiaddr, _, resp, timespent, _)) in group.enumerate() {
                             writeln!(
                                 f,
-                                "        {:<4} {:<66} {:<56} (using {:.3} seconds) {:?}",
+                                "        {:<4} {:<20} {:<56} ({:.3}s) {:?}",
                                 i,
-                                name,
+                                name.concise(),
                                 format!("{}", multiaddr),
                                 timespent,
                                 resp
                             )?;
                         }
                     }
-                }
+                };
+                writeln!(f, "{:<100}\n", "-".repeat(100))?;
             }
         }
         Ok(())
@@ -180,7 +239,7 @@ struct ConciseObjectOutput(ObjectData);
 impl ConciseObjectOutput {
     fn header() -> String {
         format!(
-            "{:<66} {:<8} {:<66} {:<45} {}",
+            "{:<20} {:<8} {:<66} {:<45} {}",
             "validator", "version", "digest", "parent_cert", "owner"
         )
     }
@@ -192,8 +251,8 @@ impl std::fmt::Display for ConciseObjectOutput {
             for (version, resp, _time_elapsed) in versions {
                 write!(
                     f,
-                    "{:<66} {:<8}",
-                    format!("{:?}", name),
+                    "{:<20} {:<8}",
+                    format!("{:?}", name.concise()),
                     version.map(|s| s.value()).opt_debug("-")
                 )?;
                 match resp {
@@ -223,12 +282,12 @@ impl std::fmt::Display for VerboseObjectOutput {
         writeln!(f, "Object: {}", self.0.requested_id)?;
 
         for (name, multiaddr, versions) in &self.0.responses {
-            writeln!(f, "validator: {:?}, addr: {:?}", name, multiaddr)?;
+            writeln!(f, "validator: {:?}, addr: {:?}", name.concise(), multiaddr)?;
 
             for (version, resp, timespent) in versions {
                 writeln!(
                     f,
-                    "-- version: {} (using {:.3} seconds)",
+                    "-- version: {} ({:.3}s)",
                     version.opt_debug("<version not available>"),
                     timespent,
                 )?;
@@ -273,10 +332,10 @@ pub async fn get_object(
     obj_id: ObjectID,
     version: Option<u64>,
     validator: Option<AuthorityName>,
-    genesis: PathBuf,
-    history: bool,
+    genesis: Option<PathBuf>,
+    fullnode_rpc: Option<String>,
 ) -> Result<ObjectData> {
-    let clients = make_clients(genesis)?;
+    let clients = make_clients(genesis, fullnode_rpc).await?;
 
     let responses = join_all(
         clients
@@ -289,7 +348,7 @@ pub async fn get_object(
                 }
             })
             .map(|(name, (address, client))| async {
-                let object_versions = get_object_impl(client, obj_id, version, history).await;
+                let object_versions = get_object_impl(client, obj_id, version).await;
                 (*name, address.clone(), object_versions)
             }),
     )
@@ -303,10 +362,11 @@ pub async fn get_object(
 
 pub async fn get_transaction_block(
     tx_digest: TransactionDigest,
-    genesis: PathBuf,
+    genesis: Option<PathBuf>,
     show_input_tx: bool,
+    fullnode_rpc: Option<String>,
 ) -> Result<String> {
-    let clients = make_clients(genesis)?;
+    let clients = make_clients(genesis, fullnode_rpc).await?;
     let timer = Instant::now();
     let responses = join_all(clients.iter().map(|(name, (address, client))| async {
         let result = client
@@ -323,6 +383,9 @@ pub async fn get_transaction_block(
     }))
     .await;
 
+    // Grab one validator that return Some(TransactionInfoResponse)
+    let validator_aware_of_tx = responses.iter().find(|r| r.2.is_ok());
+
     let responses = responses
         .iter()
         .map(|r| {
@@ -333,10 +396,13 @@ pub async fn get_transaction_block(
                         TransactionStatus::Executed(_, effects, _) => Some(effects.digest()),
                     })
                     .ok();
-            (key, r)
+            let err = r.2.as_ref().err();
+            (key, err, r)
         })
-        .sorted_by(|(k1, _), (k2, _)| Ord::cmp(k1, k2))
-        .group_by(|(_, r)| {
+        .sorted_by(|(k1, err1, _), (k2, err2, _)| {
+            Ord::cmp(k1, k2).then_with(|| Ord::cmp(err1, err2))
+        })
+        .group_by(|(_, _err, r)| {
             r.2.as_ref().map(|ok_result| match &ok_result.status {
                 TransactionStatus::Signed(_) => None,
                 TransactionStatus::Executed(_, effects, _) => Some((
@@ -366,67 +432,59 @@ pub async fn get_transaction_block(
                     "#{:<2} tx_digest: {:<68?} Signed but not executed",
                     i, tx_digest
                 )?;
+                if show_input_tx {
+                    // In this case, we expect at least one validator knows about this tx
+                    let validator_aware_of_tx = validator_aware_of_tx.unwrap();
+                    let client = &clients.get(&validator_aware_of_tx.0).unwrap().1;
+                    let tx_info = client.handle_transaction_info_request(TransactionInfoRequest {
+                        transaction_digest: tx_digest,
+                    }).await.unwrap_or_else(|e| panic!("Validator {:?} should have known about tx_digest: {:?}, got error: {:?}", validator_aware_of_tx.0, tx_digest, e));
+                    writeln!(&mut s, "{:#?}", tx_info)?;
+                }
             }
             other => {
                 writeln!(&mut s, "#{:<2} {:#?}", i, other)?;
             }
         }
-        for (j, (_, res)) in group.enumerate() {
+        for (j, (_, _, res)) in group.enumerate() {
             writeln!(
                 &mut s,
-                "        {:<4} {:<66} {:<56} (using {:.3} seconds)",
+                "        {:<4} {:<20} {:<56} ({:.3}s)",
                 j,
-                res.0,
+                res.0.concise(),
                 format!("{}", res.1),
                 res.3
             )?;
         }
-        writeln!(&mut s)?;
+        writeln!(&mut s, "{:<100}\n", "-".repeat(100))?;
     }
     Ok(s)
 }
 
+// Keep the return type a vector in case we need support for lamport versions in the near future
 async fn get_object_impl(
     client: &NetworkAuthorityClient,
     id: ObjectID,
-    start_version: Option<u64>,
-    full_history: bool,
+    version: Option<u64>,
 ) -> Vec<(Option<SequenceNumber>, Result<ObjectInfoResponse>, f64)> {
     let mut ret = Vec::new();
-    let mut version = start_version;
 
-    loop {
-        let start = Instant::now();
-        let resp = client
-            .handle_object_info_request(ObjectInfoRequest {
-                object_id: id,
-                object_format_options: Some(ObjectFormatOptions::default()),
-                request_kind: match version {
-                    None => ObjectInfoRequestKind::LatestObjectInfo,
-                    Some(v) => {
-                        ObjectInfoRequestKind::PastObjectInfoDebug(SequenceNumber::from_u64(v))
-                    }
-                },
-            })
-            .await
-            .map_err(anyhow::Error::from);
-        let elapsed = start.elapsed().as_secs_f64();
+    let start = Instant::now();
+    let resp = client
+        .handle_object_info_request(ObjectInfoRequest {
+            object_id: id,
+            object_format_options: Some(ObjectFormatOptions::default()),
+            request_kind: match version {
+                None => ObjectInfoRequestKind::LatestObjectInfo,
+                Some(v) => ObjectInfoRequestKind::PastObjectInfoDebug(SequenceNumber::from_u64(v)),
+            },
+        })
+        .await
+        .map_err(anyhow::Error::from);
+    let elapsed = start.elapsed().as_secs_f64();
 
-        let resp_version = resp.as_ref().ok().map(|r| r.object.version().value());
-        ret.push((resp_version.map(SequenceNumber::from), resp, elapsed));
-
-        version = match (version, resp_version) {
-            (Some(v), _) | (None, Some(v)) => {
-                if v == 1 || !full_history {
-                    break;
-                } else {
-                    // TODO: With lamport versioning, this is very inefficient.
-                    Some(v - 1)
-                }
-            }
-            _ => break,
-        };
-    }
+    let resp_version = resp.as_ref().ok().map(|r| r.object.version().value());
+    ret.push((resp_version.map(SequenceNumber::from), resp, elapsed));
 
     ret
 }
@@ -459,22 +517,6 @@ pub(crate) fn make_anemo_config() -> anemo_cli::Config {
                     ),
                 )
                 .add_method(
-                    "GetPayloadAvailability",
-                    anemo_cli::ron_method!(
-                        PrimaryToPrimaryClient,
-                        get_payload_availability,
-                        PayloadAvailabilityRequest
-                    ),
-                )
-                .add_method(
-                    "GetCertificates",
-                    anemo_cli::ron_method!(
-                        PrimaryToPrimaryClient,
-                        get_certificates,
-                        GetCertificatesRequest
-                    ),
-                )
-                .add_method(
                     "FetchCertificates",
                     anemo_cli::ron_method!(
                         PrimaryToPrimaryClient,
@@ -492,11 +534,11 @@ pub(crate) fn make_anemo_config() -> anemo_cli::Config {
                     anemo_cli::ron_method!(WorkerToWorkerClient, report_batch, WorkerBatchMessage),
                 )
                 .add_method(
-                    "RequestBatch",
+                    "RequestBatches",
                     anemo_cli::ron_method!(
                         WorkerToWorkerClient,
-                        request_batch,
-                        RequestBatchRequest
+                        request_batches,
+                        RequestBatchesRequest
                     ),
                 ),
         )
@@ -535,6 +577,10 @@ pub(crate) fn make_anemo_config() -> anemo_cli::Config {
                         get_checkpoint_contents,
                         sui_types::messages_checkpoint::CheckpointContentsDigest
                     ),
+                )
+                .add_method(
+                    "GetCheckpointAvailability",
+                    anemo_cli::ron_method!(StateSyncClient, get_checkpoint_availability, ()),
                 ),
         )
 }
@@ -569,5 +615,137 @@ pub async fn restore_from_db_checkpoint(
     db_checkpoint_path: &Path,
 ) -> Result<(), anyhow::Error> {
     copy_dir_all(db_checkpoint_path, config.db_path(), vec![])?;
+    Ok(())
+}
+
+pub async fn verify_archive(
+    genesis: &Path,
+    remote_store_config: ObjectStoreConfig,
+    concurrency: usize,
+    interactive: bool,
+) -> Result<()> {
+    verify_archive_with_genesis_config(genesis, remote_store_config, concurrency, interactive).await
+}
+
+pub async fn verify_archive_by_checksum(
+    remote_store_config: ObjectStoreConfig,
+    concurrency: usize,
+) -> Result<()> {
+    verify_archive_with_checksums(remote_store_config, concurrency).await
+}
+
+pub async fn state_sync_from_archive(
+    path: &Path,
+    genesis: &Path,
+    remote_store_config: ObjectStoreConfig,
+    concurrency: usize,
+) -> Result<()> {
+    let genesis = Genesis::load(genesis).unwrap();
+    let genesis_committee = genesis.committee()?;
+
+    let checkpoint_store = Arc::new(CheckpointStore::open_tables_read_write(
+        path.join("checkpoints"),
+        MetricConf::default(),
+        None,
+        None,
+    ));
+    // Only insert the genesis checkpoint if the DB is empty and doesn't have it already
+    if checkpoint_store
+        .get_checkpoint_by_digest(genesis.checkpoint().digest())
+        .unwrap()
+        .is_none()
+    {
+        checkpoint_store.insert_checkpoint_contents(genesis.checkpoint_contents().clone())?;
+        checkpoint_store.insert_verified_checkpoint(&genesis.checkpoint())?;
+        checkpoint_store.update_highest_synced_checkpoint(&genesis.checkpoint())?;
+    }
+
+    let perpetual_db = Arc::new(AuthorityPerpetualTables::open(&path.join("store"), None));
+
+    let committee_store = Arc::new(CommitteeStore::new(
+        path.join("epochs"),
+        &genesis_committee,
+        None,
+    ));
+
+    let store = AuthorityStore::open(
+        perpetual_db,
+        &genesis,
+        &committee_store,
+        usize::MAX,
+        false,
+        &Registry::default(),
+    )
+    .await?;
+
+    let latest_checkpoint = checkpoint_store
+        .get_highest_synced_checkpoint()?
+        .map(|c| c.sequence_number)
+        .unwrap_or(0);
+    let state_sync_store = RocksDbStore::new(store, committee_store, checkpoint_store.clone());
+    let archive_reader_config = ArchiveReaderConfig {
+        remote_store_config,
+        download_concurrency: NonZeroUsize::new(concurrency).unwrap(),
+        use_for_pruning_watermark: false,
+    };
+    let metrics = ArchiveReaderMetrics::new(&Registry::default());
+    let archive_reader = ArchiveReader::new(archive_reader_config, &metrics)?;
+    archive_reader.sync_manifest_once().await?;
+    let latest_checkpoint_in_archive = archive_reader.latest_available_checkpoint().await?;
+    info!(
+        "Latest available checkpoint in archive store: {}",
+        latest_checkpoint_in_archive
+    );
+    info!("Highest synced checkpoint in db: {latest_checkpoint}");
+    if latest_checkpoint_in_archive <= latest_checkpoint {
+        return Ok(());
+    }
+    let progress_bar = ProgressBar::new(latest_checkpoint_in_archive).with_style(
+        ProgressStyle::with_template("[{elapsed_precise}] {wide_bar} {pos}/{len}({msg})").unwrap(),
+    );
+    let txn_counter = Arc::new(AtomicU64::new(0));
+    let checkpoint_counter = Arc::new(AtomicU64::new(0));
+    let cloned_progress_bar = progress_bar.clone();
+    let cloned_checkpoint_store = checkpoint_store.clone();
+    let cloned_counter = txn_counter.clone();
+    let instant = Instant::now();
+    tokio::spawn(async move {
+        loop {
+            let curr_latest_checkpoint = cloned_checkpoint_store
+                .get_highest_synced_checkpoint()
+                .unwrap()
+                .map(|c| c.sequence_number)
+                .unwrap_or(0);
+            let total_checkpoints_per_sec = (curr_latest_checkpoint - latest_checkpoint) as f64
+                / instant.elapsed().as_secs_f64();
+            let total_txns_per_sec =
+                cloned_counter.load(Ordering::Relaxed) as f64 / instant.elapsed().as_secs_f64();
+            cloned_progress_bar.set_position(curr_latest_checkpoint);
+            cloned_progress_bar.set_message(format!(
+                "checkpoints/s: {}, txns/s: {}",
+                total_checkpoints_per_sec, total_txns_per_sec
+            ));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+    let start = latest_checkpoint
+        .checked_add(1)
+        .context("Checkpoint overflow")
+        .map_err(|_| anyhow!("Failed to increment checkpoint"))?;
+    info!("Starting syncing checkpoints from checkpoint seq num: {start}");
+    archive_reader
+        .read(
+            state_sync_store,
+            start..u64::MAX,
+            txn_counter,
+            checkpoint_counter,
+        )
+        .await?;
+    let end = checkpoint_store
+        .get_highest_synced_checkpoint()?
+        .map(|c| c.sequence_number)
+        .unwrap_or(0);
+    progress_bar.finish_and_clear();
+    info!("Highest synced checkpoint after sync: {end}");
     Ok(())
 }

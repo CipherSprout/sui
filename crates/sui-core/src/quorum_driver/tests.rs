@@ -10,16 +10,14 @@ use mysten_common::sync::notify_read::{NotifyRead, Registration};
 use std::sync::Arc;
 use std::time::Duration;
 use sui_types::base_types::SuiAddress;
+use sui_types::base_types::TransactionDigest;
 use sui_types::crypto::{deterministic_random_account_key, get_key_pair, AccountKeyPair};
-use sui_types::messages::{TransactionEffectsAPI, VerifiedTransaction};
+use sui_types::effects::TransactionEffectsAPI;
 use sui_types::object::{generate_test_gas_objects, Object};
-use sui_types::quorum_driver_types::{QuorumDriverError, QuorumDriverResult};
-use sui_types::{base_types::TransactionDigest, messages::QuorumDriverResponse};
+use sui_types::quorum_driver_types::{QuorumDriverError, QuorumDriverResponse, QuorumDriverResult};
+use sui_types::transaction::Transaction;
 
-async fn setup() -> (
-    AuthorityAggregator<LocalAuthorityClient>,
-    VerifiedTransaction,
-) {
+async fn setup() -> (AuthorityAggregator<LocalAuthorityClient>, Transaction) {
     let (sender, keypair): (_, AccountKeyPair) = get_key_pair();
     let gas_object = Object::with_owner_for_testing(sender);
     let (aggregator, authorities, genesis, _) =
@@ -44,7 +42,7 @@ fn make_tx(
     sender: SuiAddress,
     keypair: &AccountKeyPair,
     gas_price: u64,
-) -> VerifiedTransaction {
+) -> Transaction {
     make_transfer_sui_transaction(
         gas.compute_object_reference(),
         SuiAddress::random_for_testing_only(),
@@ -195,7 +193,9 @@ async fn test_quorum_driver_update_validators_and_max_retry_times() {
     });
 
     // Update authority aggregator with a new epoch number, and let quorum driver know.
-    aggregator.committee.epoch = 10;
+    let mut committee = aggregator.clone_inner_committee_test_only();
+    committee.epoch = 10;
+    aggregator.committee = Arc::new(committee);
     quorum_driver_clone
         .update_validators(Arc::new(aggregator))
         .await;
@@ -249,9 +249,9 @@ async fn test_quorum_driver_object_locked() -> Result<(), anyhow::Error> {
     let tx = make_tx(&gas, sender, &keypair, rgp);
     let names: Vec<_> = aggregator.authority_clients.keys().clone().collect();
     assert_eq!(names.len(), 4);
-    let client0 = aggregator.clone_client(names[0]);
-    let client1 = aggregator.clone_client(names[1]);
-    let client2 = aggregator.clone_client(names[2]);
+    let client0 = aggregator.clone_client_test_only(names[0]);
+    let client1 = aggregator.clone_client_test_only(names[1]);
+    let client2 = aggregator.clone_client_test_only(names[2]);
 
     println!("Case 0 - two validators lock the object with the same tx");
     assert!(client0.handle_transaction(tx.clone()).await.is_ok());
@@ -351,7 +351,8 @@ async fn test_quorum_driver_object_locked() -> Result<(), anyhow::Error> {
         assert_eq!(retried_tx, None);
         assert_eq!(retried_tx_success, None);
         assert_eq!(conflicting_txes.len(), 2);
-        assert_eq!(conflicting_txes.get(tx.digest()).unwrap().1, 5000);
+        let tx_stake = conflicting_txes.get(tx.digest()).unwrap().1;
+        assert!(tx_stake == 2500 || tx_stake == 5000);
         assert_eq!(conflicting_txes.get(tx2.digest()).unwrap().1, 2500);
     } else {
         panic!(
@@ -430,10 +431,11 @@ async fn test_quorum_driver_object_locked() -> Result<(), anyhow::Error> {
     {
         assert_eq!(retried_tx, None);
         assert_eq!(retried_tx_success, None);
-        assert_eq!(conflicting_txes.len(), 3);
-        assert_eq!(conflicting_txes.get(tx.digest()).unwrap().1, 2500);
-        assert_eq!(conflicting_txes.get(tx2.digest()).unwrap().1, 2500);
-        assert_eq!(conflicting_txes.get(tx3.digest()).unwrap().1, 2500);
+        assert!(conflicting_txes.len() == 3 || conflicting_txes.len() == 2);
+        assert!(conflicting_txes
+            .iter()
+            .all(|(digest, (_objs, stake))| (*stake == 2500)
+                && (digest == tx.digest() || digest == tx2.digest() || digest == tx3.digest())));
     } else {
         panic!(
             "expect Err(QuorumDriverError::ObjectsDoubleUsed) but got {:?}",

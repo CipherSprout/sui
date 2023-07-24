@@ -16,7 +16,7 @@ use collectable::TryExtend;
 use itertools::Itertools;
 use rocksdb::{
     checkpoint::Checkpoint, BlockBasedOptions, BottommostLevelCompaction, Cache, CompactOptions,
-    LiveFile, OptimisticTransactionDB, SnapshotWithThreadMode,
+    DBPinnableSlice, LiveFile, OptimisticTransactionDB, SnapshotWithThreadMode,
 };
 use rocksdb::{
     properties, AsColumnFamilyRef, CStrLike, ColumnFamilyDescriptor, DBWithThreadMode, Error,
@@ -24,16 +24,17 @@ use rocksdb::{
     WriteBatch, WriteBatchWithTransaction, WriteOptions,
 };
 use serde::{de::DeserializeOwned, Serialize};
-use std::collections::HashSet;
 use std::{
     borrow::Borrow,
     collections::BTreeMap,
     env,
     marker::PhantomData,
+    ops::RangeBounds,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
+use std::{collections::HashSet, ffi::CStr};
 use tap::TapFallible;
 use tokio::sync::oneshot;
 use tracing::{error, info, instrument, warn};
@@ -41,6 +42,7 @@ use tracing::{error, info, instrument, warn};
 use self::{iter::Iter, keys::Keys, values::Values};
 use crate::rocks::safe_iter::SafeIter;
 pub use errors::TypedStoreError;
+use std::ops::Bound;
 use sui_macros::{fail_point, nondeterministic};
 
 // Write buffer size per RocksDB instance can be set via the env var below.
@@ -67,6 +69,11 @@ const DEFAULT_TARGET_FILE_SIZE_BASE_MB: usize = 128;
 const ENV_VAR_DISABLE_BLOB_STORAGE: &str = "DISABLE_BLOB_STORAGE";
 
 const ENV_VAR_MAX_BACKGROUND_JOBS: &str = "MAX_BACKGROUND_JOBS";
+
+// TODO: remove this after Rust rocksdb has the TOTAL_BLOB_FILES_SIZE property built-in.
+// From https://github.com/facebook/rocksdb/blob/bd80433c73691031ba7baa65c16c63a83aef201a/include/rocksdb/db.h#L1169
+const ROCKSDB_PROPERTY_TOTAL_BLOB_FILES_SIZE: &CStr =
+    unsafe { CStr::from_bytes_with_nul_unchecked("rocksdb.total-blob-file-size\0".as_bytes()) };
 
 #[cfg(test)]
 mod tests;
@@ -239,6 +246,20 @@ impl RocksDB {
         delegate_call!(self.multi_get_cf_opt(keys, readopts))
     }
 
+    pub fn batched_multi_get_cf_opt<I, K>(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+        keys: I,
+        sorted_input: bool,
+        readopts: &ReadOptions,
+    ) -> Vec<Result<Option<DBPinnableSlice<'_>>, Error>>
+    where
+        I: IntoIterator<Item = K>,
+        K: AsRef<[u8]>,
+    {
+        delegate_call!(self.batched_multi_get_cf_opt(cf, keys, sorted_input, readopts))
+    }
+
     pub fn property_int_value_cf(
         &self,
         cf: &impl AsColumnFamilyRef,
@@ -247,12 +268,12 @@ impl RocksDB {
         delegate_call!(self.property_int_value_cf(cf, name))
     }
 
-    pub fn get_pinned_cf<K: AsRef<[u8]>>(
+    pub fn get_pinned_cf_opt<K: AsRef<[u8]>>(
         &self,
         cf: &impl AsColumnFamilyRef,
         key: K,
         readopts: &ReadOptions,
-    ) -> Result<Option<rocksdb::DBPinnableSlice<'_>>, rocksdb::Error> {
+    ) -> Result<Option<DBPinnableSlice<'_>>, rocksdb::Error> {
         delegate_call!(self.get_pinned_cf_opt(cf, key, readopts))
     }
 
@@ -320,15 +341,19 @@ impl RocksDB {
         delegate_call!(self.try_catch_up_with_primary())
     }
 
-    pub fn write(&self, batch: RocksDBBatch) -> Result<(), TypedStoreError> {
+    pub fn write(
+        &self,
+        batch: RocksDBBatch,
+        writeopts: &WriteOptions,
+    ) -> Result<(), TypedStoreError> {
         fail_point!("batch-write-before");
         let ret = match (self, batch) {
             (RocksDB::DBWithThreadMode(db), RocksDBBatch::Regular(batch)) => {
-                db.underlying.write(batch)?;
+                db.underlying.write_opt(batch, writeopts)?;
                 Ok(())
             }
             (RocksDB::OptimisticTransactionDB(db), RocksDBBatch::Transactional(batch)) => {
-                db.underlying.write(batch)?;
+                db.underlying.write_opt(batch, writeopts)?;
                 Ok(())
             }
             _ => Err(TypedStoreError::RocksDBError(
@@ -456,31 +481,31 @@ impl RocksDB {
         delegate_call!(self.set_options_cf(cf, opts))
     }
 
-    pub fn read_sampling_interval(&self) -> SamplingInterval {
+    pub fn get_sampling_interval(&self) -> SamplingInterval {
         match self {
-            Self::DBWithThreadMode(d) => d.metric_conf.read_sample_interval.clone(),
-            Self::OptimisticTransactionDB(d) => d.metric_conf.read_sample_interval.clone(),
+            Self::DBWithThreadMode(d) => d.metric_conf.read_sample_interval.new_from_self(),
+            Self::OptimisticTransactionDB(d) => d.metric_conf.read_sample_interval.new_from_self(),
+        }
+    }
+
+    pub fn multiget_sampling_interval(&self) -> SamplingInterval {
+        match self {
+            Self::DBWithThreadMode(d) => d.metric_conf.read_sample_interval.new_from_self(),
+            Self::OptimisticTransactionDB(d) => d.metric_conf.read_sample_interval.new_from_self(),
         }
     }
 
     pub fn write_sampling_interval(&self) -> SamplingInterval {
         match self {
-            Self::DBWithThreadMode(d) => d.metric_conf.write_sample_interval.clone(),
-            Self::OptimisticTransactionDB(d) => d.metric_conf.write_sample_interval.clone(),
+            Self::DBWithThreadMode(d) => d.metric_conf.write_sample_interval.new_from_self(),
+            Self::OptimisticTransactionDB(d) => d.metric_conf.write_sample_interval.new_from_self(),
         }
     }
 
-    pub fn iter_latency_sampling_interval(&self) -> SamplingInterval {
+    pub fn iter_sampling_interval(&self) -> SamplingInterval {
         match self {
-            Self::DBWithThreadMode(d) => d.metric_conf.iter_latency_sample_interval.clone(),
-            Self::OptimisticTransactionDB(d) => d.metric_conf.iter_latency_sample_interval.clone(),
-        }
-    }
-
-    pub fn iter_bytes_sampling_interval(&self) -> SamplingInterval {
-        match self {
-            Self::DBWithThreadMode(d) => d.metric_conf.iter_bytes_sample_interval.clone(),
-            Self::OptimisticTransactionDB(d) => d.metric_conf.iter_bytes_sample_interval.clone(),
+            Self::DBWithThreadMode(d) => d.metric_conf.iter_sample_interval.new_from_self(),
+            Self::OptimisticTransactionDB(d) => d.metric_conf.iter_sample_interval.new_from_self(),
         }
     }
 
@@ -611,8 +636,7 @@ pub struct MetricConf {
     pub db_name_override: Option<String>,
     pub read_sample_interval: SamplingInterval,
     pub write_sample_interval: SamplingInterval,
-    pub iter_latency_sample_interval: SamplingInterval,
-    pub iter_bytes_sample_interval: SamplingInterval,
+    pub iter_sample_interval: SamplingInterval,
 }
 
 impl MetricConf {
@@ -621,8 +645,7 @@ impl MetricConf {
             db_name_override: Some(db_name.to_string()),
             read_sample_interval: SamplingInterval::default(),
             write_sample_interval: SamplingInterval::default(),
-            iter_latency_sample_interval: SamplingInterval::default(),
-            iter_bytes_sample_interval: SamplingInterval::default(),
+            iter_sample_interval: SamplingInterval::default(),
         }
     }
     pub fn with_sampling(read_interval: SamplingInterval) -> Self {
@@ -630,8 +653,7 @@ impl MetricConf {
             db_name_override: None,
             read_sample_interval: read_interval,
             write_sample_interval: SamplingInterval::default(),
-            iter_latency_sample_interval: SamplingInterval::default(),
-            iter_bytes_sample_interval: SamplingInterval::default(),
+            iter_sample_interval: SamplingInterval::default(),
         }
     }
 }
@@ -647,10 +669,10 @@ pub struct DBMap<K, V> {
     cf: String,
     pub opts: ReadWriteOptions,
     db_metrics: Arc<DBMetrics>,
-    read_sample_interval: SamplingInterval,
+    get_sample_interval: SamplingInterval,
+    multiget_sample_interval: SamplingInterval,
     write_sample_interval: SamplingInterval,
-    iter_latency_sample_interval: SamplingInterval,
-    iter_bytes_sample_interval: SamplingInterval,
+    iter_sample_interval: SamplingInterval,
     _metrics_task_cancel_handle: Arc<oneshot::Sender<()>>,
 }
 
@@ -690,10 +712,10 @@ impl<K, V> DBMap<K, V> {
             cf: opt_cf.to_string(),
             db_metrics: db_metrics_cloned,
             _metrics_task_cancel_handle: Arc::new(sender),
-            read_sample_interval: db.read_sampling_interval(),
+            get_sample_interval: db.get_sampling_interval(),
+            multiget_sample_interval: db.multiget_sampling_interval(),
             write_sample_interval: db.write_sampling_interval(),
-            iter_bytes_sample_interval: db.iter_bytes_sampling_interval(),
-            iter_latency_sample_interval: db.iter_latency_sampling_interval(),
+            iter_sample_interval: db.iter_sampling_interval(),
         }
     }
 
@@ -761,6 +783,7 @@ impl<K, V> DBMap<K, V> {
         DBBatch::new(
             &self.rocksdb,
             batch,
+            self.opts.writeopts(),
             &self.db_metrics,
             &self.write_sample_interval,
         )
@@ -771,6 +794,20 @@ impl<K, V> DBMap<K, V> {
         let to_buf = be_fix_int_ser(end.borrow())?;
         self.rocksdb
             .compact_range_cf(&self.cf(), Some(from_buf), Some(to_buf));
+        Ok(())
+    }
+
+    pub fn compact_range_raw(
+        &self,
+        cf_name: &str,
+        start: Vec<u8>,
+        end: Vec<u8>,
+    ) -> Result<(), TypedStoreError> {
+        let cf = self
+            .rocksdb
+            .cf_handle(cf_name)
+            .expect("compact range: column family does not exist");
+        self.rocksdb.compact_range_cf(&cf, Some(start), Some(end));
         Ok(())
     }
 
@@ -819,6 +856,60 @@ impl<K, V> DBMap<K, V> {
         }
     }
 
+    /// Returns a vector of raw values corresponding to the keys provided.
+    fn multi_get_pinned<J>(
+        &self,
+        keys: impl IntoIterator<Item = J>,
+    ) -> Result<Vec<Option<DBPinnableSlice<'_>>>, TypedStoreError>
+    where
+        J: Borrow<K>,
+        K: Serialize,
+    {
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_multiget_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let perf_ctx = if self.multiget_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
+        } else {
+            None
+        };
+        let keys_bytes: Result<Vec<_>, TypedStoreError> = keys
+            .into_iter()
+            .map(|k| be_fix_int_ser(k.borrow()))
+            .collect();
+        let results: Result<Vec<_>, TypedStoreError> = self
+            .rocksdb
+            .batched_multi_get_cf_opt(
+                &self.cf(),
+                keys_bytes?,
+                /*sorted_keys=*/ false,
+                &self.opts.readopts(),
+            )
+            .into_iter()
+            .map(|r| r.map_err(|e| TypedStoreError::RocksDBError(e.into_string())))
+            .collect();
+        let entries = results?;
+        let entry_size = entries
+            .iter()
+            .flatten()
+            .map(|entry| entry.len())
+            .sum::<usize>();
+        self.db_metrics
+            .op_metrics
+            .rocksdb_multiget_bytes
+            .with_label_values(&[&self.cf])
+            .observe(entry_size as f64);
+        if perf_ctx.is_some() {
+            self.db_metrics
+                .read_perf_ctx_metrics
+                .report_metrics(&self.cf);
+        }
+        Ok(entries)
+    }
+
     fn report_metrics(rocksdb: &Arc<RocksDB>, cf_name: &str, db_metrics: &Arc<DBMetrics>) {
         let cf = rocksdb.cf_handle(cf_name).expect("Failed to get cf");
         db_metrics
@@ -827,6 +918,14 @@ impl<K, V> DBMap<K, V> {
             .with_label_values(&[cf_name])
             .set(
                 Self::get_int_property(rocksdb, &cf, properties::TOTAL_SST_FILES_SIZE)
+                    .unwrap_or(METRICS_ERROR),
+            );
+        db_metrics
+            .cf_metrics
+            .rocksdb_total_blob_files_size
+            .with_label_values(&[cf_name])
+            .set(
+                Self::get_int_property(rocksdb, &cf, ROCKSDB_PROPERTY_TOTAL_BLOB_FILES_SIZE)
                     .unwrap_or(METRICS_ERROR),
             );
         db_metrics
@@ -1053,6 +1152,7 @@ impl<K, V> DBMap<K, V> {
 pub struct DBBatch {
     rocksdb: Arc<RocksDB>,
     batch: RocksDBBatch,
+    opts: WriteOptions,
     db_metrics: Arc<DBMetrics>,
     write_sample_interval: SamplingInterval,
 }
@@ -1064,12 +1164,14 @@ impl DBBatch {
     pub fn new(
         dbref: &Arc<RocksDB>,
         batch: RocksDBBatch,
+        opts: WriteOptions,
         db_metrics: &Arc<DBMetrics>,
         write_sample_interval: &SamplingInterval,
     ) -> Self {
         DBBatch {
             rocksdb: dbref.clone(),
             batch,
+            opts,
             db_metrics: db_metrics.clone(),
             write_sample_interval: write_sample_interval.clone(),
         }
@@ -1078,26 +1180,28 @@ impl DBBatch {
     /// Consume the batch and write its operations to the database
     #[instrument(level = "trace", skip_all, err)]
     pub fn write(self) -> Result<(), TypedStoreError> {
-        let report_metrics = if self.write_sample_interval.sample() {
-            let db_name = self.rocksdb.db_name();
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_batch_commit_latency_seconds
-                .with_label_values(&[&db_name])
-                .start_timer();
-            let size = self.batch.size_in_bytes();
-            Some((db_name, size, timer, RocksDBPerfContext::default()))
+        let db_name = self.rocksdb.db_name();
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_batch_commit_latency_seconds
+            .with_label_values(&[&db_name])
+            .start_timer();
+        let batch_size = self.batch.size_in_bytes();
+
+        let perf_ctx = if self.write_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
-        self.rocksdb.write(self.batch)?;
-        if let Some((db_name, batch_size, _timer, _perf_ctx)) = report_metrics {
-            self.db_metrics
-                .op_metrics
-                .rocksdb_batch_commit_bytes
-                .with_label_values(&[&db_name])
-                .observe(batch_size as f64);
+        self.rocksdb.write(self.batch, &self.opts)?;
+        self.db_metrics
+            .op_metrics
+            .rocksdb_batch_commit_bytes
+            .with_label_values(&[&db_name])
+            .observe(batch_size as f64);
+
+        if perf_ctx.is_some() {
             self.db_metrics
                 .write_perf_ctx_metrics
                 .report_metrics(&db_name);
@@ -1337,7 +1441,15 @@ impl<'a> DBTransaction<'a> {
         let db_iter = self
             .transaction
             .raw_iterator_cf_opt(&db.cf(), db.opts.readopts());
-        Iter::new(RocksDBRawIter::OptimisticTransaction(db_iter))
+        Iter::new(
+            db.cf.clone(),
+            RocksDBRawIter::OptimisticTransaction(db_iter),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn keys<K: DeserializeOwned, V: DeserializeOwned>(
@@ -1473,33 +1585,45 @@ where
             .key_may_exist_cf(&self.cf(), &key_buf, &readopts)
             && self
                 .rocksdb
-                .get_pinned_cf(&self.cf(), &key_buf, &readopts)?
+                .get_pinned_cf_opt(&self.cf(), &key_buf, &readopts)?
                 .is_some())
     }
 
     #[instrument(level = "trace", skip_all, err)]
+    fn multi_contains_keys<J>(
+        &self,
+        keys: impl IntoIterator<Item = J>,
+    ) -> Result<Vec<bool>, Self::Error>
+    where
+        J: Borrow<K>,
+    {
+        let values = self.multi_get_pinned(keys)?;
+        Ok(values.into_iter().map(|v| v.is_some()).collect())
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
     fn get(&self, key: &K) -> Result<Option<V>, TypedStoreError> {
-        let report_metrics = if self.read_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_get_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_get_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let perf_ctx = if self.get_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
         let key_buf = be_fix_int_ser(key)?;
         let res = self
             .rocksdb
-            .get_pinned_cf(&self.cf(), &key_buf, &self.opts.readopts())?;
-        if report_metrics.is_some() {
-            self.db_metrics
-                .op_metrics
-                .rocksdb_get_bytes
-                .with_label_values(&[&self.cf])
-                .observe(res.as_ref().map_or(0.0, |v| v.len() as f64));
+            .get_pinned_cf_opt(&self.cf(), &key_buf, &self.opts.readopts())?;
+        self.db_metrics
+            .op_metrics
+            .rocksdb_get_bytes
+            .with_label_values(&[&self.cf])
+            .observe(res.as_ref().map_or(0.0, |v| v.len() as f64));
+        if perf_ctx.is_some() {
             self.db_metrics
                 .read_perf_ctx_metrics
                 .report_metrics(&self.cf);
@@ -1512,27 +1636,27 @@ where
 
     #[instrument(level = "trace", skip_all, err)]
     fn get_raw_bytes(&self, key: &K) -> Result<Option<Vec<u8>>, TypedStoreError> {
-        let report_metrics = if self.read_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_get_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_get_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let perf_ctx = if self.get_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
         let key_buf = be_fix_int_ser(key)?;
         let res = self
             .rocksdb
-            .get_pinned_cf(&self.cf(), &key_buf, &self.opts.readopts())?;
-        if report_metrics.is_some() {
-            self.db_metrics
-                .op_metrics
-                .rocksdb_get_bytes
-                .with_label_values(&[&self.cf])
-                .observe(res.as_ref().map_or(0.0, |v| v.len() as f64));
+            .get_pinned_cf_opt(&self.cf(), &key_buf, &self.opts.readopts())?;
+        self.db_metrics
+            .op_metrics
+            .rocksdb_get_bytes
+            .with_label_values(&[&self.cf])
+            .observe(res.as_ref().map_or(0.0, |v| v.len() as f64));
+        if perf_ctx.is_some() {
             self.db_metrics
                 .read_perf_ctx_metrics
                 .report_metrics(&self.cf);
@@ -1545,25 +1669,25 @@ where
 
     #[instrument(level = "trace", skip_all, err)]
     fn insert(&self, key: &K, value: &V) -> Result<(), TypedStoreError> {
-        let report_metrics = if self.write_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_put_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_put_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let perf_ctx = if self.write_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
         let key_buf = be_fix_int_ser(key)?;
         let value_buf = bcs::to_bytes(value)?;
-        if report_metrics.is_some() {
-            self.db_metrics
-                .op_metrics
-                .rocksdb_put_bytes
-                .with_label_values(&[&self.cf])
-                .observe((key_buf.len() + value_buf.len()) as f64);
+        self.db_metrics
+            .op_metrics
+            .rocksdb_put_bytes
+            .with_label_values(&[&self.cf])
+            .observe((key_buf.len() + value_buf.len()) as f64);
+        if perf_ctx.is_some() {
             self.db_metrics
                 .write_perf_ctx_metrics
                 .report_metrics(&self.cf);
@@ -1575,26 +1699,26 @@ where
 
     #[instrument(level = "trace", skip_all, err)]
     fn remove(&self, key: &K) -> Result<(), TypedStoreError> {
-        let report_metrics = if self.write_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_delete_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_delete_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let perf_ctx = if self.write_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
         let key_buf = be_fix_int_ser(key)?;
         self.rocksdb
             .delete_cf(&self.cf(), key_buf, &self.opts.writeopts())?;
-        if report_metrics.is_some() {
-            self.db_metrics
-                .op_metrics
-                .rocksdb_deletes
-                .with_label_values(&[&self.cf])
-                .inc();
+        self.db_metrics
+            .op_metrics
+            .rocksdb_deletes
+            .with_label_values(&[&self.cf])
+            .inc();
+        if perf_ctx.is_some() {
             self.db_metrics
                 .write_perf_ctx_metrics
                 .report_metrics(&self.cf);
@@ -1602,11 +1726,29 @@ where
         Ok(())
     }
 
+    /// This method first drops the existing column family and then creates a new one
+    /// with the same name. The two operations are not atomic and hence it is possible
+    /// to get into a race condition where the column family has been dropped but new
+    /// one is not created yet
     #[instrument(level = "trace", skip_all, err)]
-    fn clear(&self) -> Result<(), TypedStoreError> {
+    fn unsafe_clear(&self) -> Result<(), TypedStoreError> {
         let _ = self.rocksdb.drop_cf(&self.cf);
         self.rocksdb
             .create_cf(self.cf.clone(), &default_db_options().options)?;
+        Ok(())
+    }
+
+    /// Deletes all entries in the db map using a single delete range operation
+    #[instrument(level = "trace", skip_all, err)]
+    fn delete_all(&self) -> Result<(), TypedStoreError> {
+        let mut iter = self.unbounded_iter().seek_to_first();
+        let first_key = iter.next().map(|(k, _v)| k);
+        let last_key = iter.skip_to_last().next().map(|(k, _v)| k);
+        if let Some((first_key, last_key)) = first_key.zip(last_key) {
+            let mut batch = self.batch();
+            batch.delete_range(self, &first_key, &last_key)?;
+            batch.write()?;
+        }
         Ok(())
     }
 
@@ -1614,79 +1756,111 @@ where
         self.safe_iter().next().is_none()
     }
 
-    fn iter(&'a self) -> Self::Iterator {
-        let report_metrics = if self.iter_latency_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_iter_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
+    /// Returns an unbounded iterator visiting each key-value pair in the map.
+    /// This is potentially unsafe as it can perform a full table scan
+    fn unbounded_iter(&'a self) -> Self::Iterator {
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let bytes_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_bytes
+            .with_label_values(&[&self.cf]);
+        let keys_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_keys
+            .with_label_values(&[&self.cf]);
+        let _perf_ctx = if self.iter_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
         let db_iter = self
             .rocksdb
             .raw_iterator_cf(&self.cf(), self.opts.readopts());
-        if let Some((timer, _perf_ctx)) = report_metrics {
-            timer.stop_and_record();
-            self.db_metrics
-                .read_perf_ctx_metrics
-                .report_metrics(&self.cf);
-        }
-        Iter::new(db_iter)
+        Iter::new(
+            self.cf.clone(),
+            db_iter,
+            Some(_timer),
+            _perf_ctx,
+            Some(bytes_scanned),
+            Some(keys_scanned),
+            Some(self.db_metrics.clone()),
+        )
     }
 
     fn safe_iter(&'a self) -> Self::SafeIterator {
-        let report_metrics = if self.iter_latency_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_iter_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let _perf_ctx = if self.iter_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
+        let bytes_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_bytes
+            .with_label_values(&[&self.cf]);
+        let keys_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_keys
+            .with_label_values(&[&self.cf]);
         let mut db_iter = self
             .rocksdb
             .raw_iterator_cf(&self.cf(), self.opts.readopts());
         db_iter.seek_to_first();
-        if let Some((timer, _perf_ctx)) = report_metrics {
-            timer.stop_and_record();
-            self.db_metrics
-                .read_perf_ctx_metrics
-                .report_metrics(&self.cf);
-        }
         SafeIter::new(
-            db_iter,
             self.cf.clone(),
-            &self.db_metrics,
-            &self.iter_bytes_sample_interval,
+            db_iter,
+            Some(_timer),
+            _perf_ctx,
+            Some(bytes_scanned),
+            Some(keys_scanned),
+            Some(self.db_metrics.clone()),
         )
     }
 
     /// Returns an iterator visiting each key-value pair in the map. By proving bounds of the
-    /// scan range, RocksDB scan avoid unnecessary scans
+    /// scan range, RocksDB scan avoid unnecessary scans.
+    /// Lower bound is inclusive, while upper bound is exclusive.
     fn iter_with_bounds(
         &'a self,
         lower_bound: Option<K>,
         upper_bound: Option<K>,
     ) -> Self::Iterator {
-        let report_metrics = if self.iter_latency_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_iter_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let bytes_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_bytes
+            .with_label_values(&[&self.cf]);
+        let keys_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_keys
+            .with_label_values(&[&self.cf]);
+        let _perf_ctx = if self.iter_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
         } else {
             None
         };
-        let mut readopts = ReadOptions::default();
+        let mut readopts = self.opts.readopts();
         if let Some(lower_bound) = lower_bound {
             let key_buf = be_fix_int_ser(&lower_bound).unwrap();
             readopts.set_iterate_lower_bound(key_buf);
@@ -1696,13 +1870,94 @@ where
             readopts.set_iterate_upper_bound(key_buf);
         }
         let db_iter = self.rocksdb.raw_iterator_cf(&self.cf(), readopts);
-        if let Some((timer, _perf_ctx)) = report_metrics {
-            timer.stop_and_record();
-            self.db_metrics
-                .read_perf_ctx_metrics
-                .report_metrics(&self.cf);
-        }
-        Iter::new(db_iter)
+        Iter::new(
+            self.cf.clone(),
+            db_iter,
+            Some(_timer),
+            _perf_ctx,
+            Some(bytes_scanned),
+            Some(keys_scanned),
+            Some(self.db_metrics.clone()),
+        )
+    }
+
+    /// Similar to `iter_with_bounds` but allows specifying inclusivity/exclusivity of ranges explicitly.
+    /// TODO: find better name
+    fn range_iter(&'a self, range: impl RangeBounds<K>) -> Self::Iterator {
+        // TODO: Change the metrics?
+        let _timer = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_latency_seconds
+            .with_label_values(&[&self.cf])
+            .start_timer();
+        let bytes_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_bytes
+            .with_label_values(&[&self.cf]);
+        let keys_scanned = self
+            .db_metrics
+            .op_metrics
+            .rocksdb_iter_keys
+            .with_label_values(&[&self.cf]);
+        let _perf_ctx = if self.iter_sample_interval.sample() {
+            Some(RocksDBPerfContext::default())
+        } else {
+            None
+        };
+        let mut readopts = self.opts.readopts();
+
+        let lower_bound = range.start_bound();
+        let upper_bound = range.end_bound();
+
+        match lower_bound {
+            Bound::Included(lower_bound) => {
+                // Rocksdb lower bound is inclusive by default so nothing to do
+                let key_buf = be_fix_int_ser(&lower_bound).expect("Serialization must not fail");
+                readopts.set_iterate_lower_bound(key_buf);
+            }
+            Bound::Excluded(lower_bound) => {
+                let mut key_buf =
+                    be_fix_int_ser(&lower_bound).expect("Serialization must not fail");
+
+                // Since we want exclusive, we need to increment the key to exclude the previous
+                big_endian_saturating_add_one(&mut key_buf);
+                readopts.set_iterate_lower_bound(key_buf);
+            }
+            Bound::Unbounded => (),
+        };
+
+        match upper_bound {
+            Bound::Included(upper_bound) => {
+                let mut key_buf =
+                    be_fix_int_ser(&upper_bound).expect("Serialization must not fail");
+
+                // If the key is already at the limit, there's nowhere else to go, so no upper bound
+                if !is_max(&key_buf) {
+                    // Since we want exclusive, we need to increment the key to get the upper bound
+                    big_endian_saturating_add_one(&mut key_buf);
+                    readopts.set_iterate_upper_bound(key_buf);
+                }
+            }
+            Bound::Excluded(upper_bound) => {
+                // Rocksdb upper bound is inclusive by default so nothing to do
+                let key_buf = be_fix_int_ser(&upper_bound).expect("Serialization must not fail");
+                readopts.set_iterate_upper_bound(key_buf);
+            }
+            Bound::Unbounded => (),
+        };
+
+        let db_iter = self.rocksdb.raw_iterator_cf(&self.cf(), readopts);
+        Iter::new(
+            self.cf.clone(),
+            db_iter,
+            Some(_timer),
+            _perf_ctx,
+            Some(bytes_scanned),
+            Some(keys_scanned),
+            Some(self.db_metrics.clone()),
+        )
     }
 
     fn keys(&'a self) -> Self::Keys {
@@ -1732,43 +1987,12 @@ where
     where
         J: Borrow<K>,
     {
-        let report_metrics = if self.read_sample_interval.sample() {
-            let timer = self
-                .db_metrics
-                .op_metrics
-                .rocksdb_multiget_latency_seconds
-                .with_label_values(&[&self.cf])
-                .start_timer();
-            Some((timer, RocksDBPerfContext::default()))
-        } else {
-            None
-        };
-        let cf = self.cf();
-
-        let keys_bytes: Result<Vec<_>, TypedStoreError> = keys
-            .into_iter()
-            .map(|k| Ok((&cf, be_fix_int_ser(k.borrow())?)))
-            .collect();
-
         let results = self
-            .rocksdb
-            .multi_get_cf(keys_bytes?, &self.opts.readopts());
-        let entry_size = |entry: &Result<Option<Vec<u8>>, rocksdb::Error>| -> f64 {
-            entry
-                .as_ref()
-                .map_or(0.0, |e| e.as_ref().map_or(0.0, |v| v.len() as f64))
-        };
-        if report_metrics.is_some() {
-            self.db_metrics
-                .op_metrics
-                .rocksdb_multiget_bytes
-                .with_label_values(&[&self.cf])
-                .observe(results.iter().map(entry_size).sum());
-            self.db_metrics
-                .read_perf_ctx_metrics
-                .report_metrics(&self.cf);
-        }
-        Ok(results.into_iter().collect::<Result<_, _>>()?)
+            .multi_get_pinned(keys)?
+            .into_iter()
+            .map(|val| val.map(|v| v.to_vec()))
+            .collect();
+        Ok(results)
     }
 
     /// Returns a vector of values corresponding to the keys provided.
@@ -1780,7 +2004,7 @@ where
     where
         J: Borrow<K>,
     {
-        let results = self.multi_get_raw_bytes(keys)?;
+        let results = self.multi_get_pinned(keys)?;
         let values_parsed: Result<Vec<_>, TypedStoreError> = results
             .into_iter()
             .map(|value_byte| match value_byte {
@@ -1898,9 +2122,11 @@ pub fn read_size_from_env(var_name: &str) -> Option<usize> {
         .ok()
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct ReadWriteOptions {
     pub ignore_range_deletions: bool,
+    // Whether to sync to disk on every write.
+    sync_to_disk: bool,
 }
 
 impl ReadWriteOptions {
@@ -1909,11 +2135,27 @@ impl ReadWriteOptions {
         readopts.set_ignore_range_deletions(self.ignore_range_deletions);
         readopts
     }
+
     pub fn writeopts(&self) -> WriteOptions {
-        WriteOptions::default()
+        let mut opts = WriteOptions::default();
+        opts.set_sync(self.sync_to_disk);
+        opts
+    }
+
+    pub fn set_ignore_range_deletions(mut self, ignore: bool) -> Self {
+        self.ignore_range_deletions = ignore;
+        self
     }
 }
 
+impl Default for ReadWriteOptions {
+    fn default() -> Self {
+        Self {
+            ignore_range_deletions: true,
+            sync_to_disk: std::env::var("SUI_DB_SYNC_TO_DISK").map_or(false, |v| v != "0"),
+        }
+    }
+}
 // TODO: refactor this into a builder pattern, where rocksdb::Options are
 // generated after a call to build().
 #[derive(Default, Clone)]
@@ -1935,8 +2177,7 @@ impl DBOptions {
 
     // Optimize write and lookup perf for tables which are rarely scanned, and have large values.
     // https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
-    // REQUIRED: table must set optimize_for_write_throughput() earlier.
-    pub fn optimize_for_large_values_no_scan(mut self) -> DBOptions {
+    pub fn optimize_for_large_values_no_scan(mut self, min_blob_size: u64) -> DBOptions {
         if env::var(ENV_VAR_DISABLE_BLOB_STORAGE).is_ok() {
             info!("Large value blob storage optimization is disabled via env var.");
             return self;
@@ -1947,13 +2188,18 @@ impl DBOptions {
         self.options
             .set_blob_compression_type(rocksdb::DBCompressionType::Lz4);
         self.options.set_enable_blob_gc(true);
-        // Not setting a min_blob_size, to avoid additional behavior variance when workload changes.
-        // Most transactions and effects are > 300B, which makes blob storage worthwhile for
-        // saving write cost.
+        // Since each blob can have non-trivial size overhead, and compression does not work across blobs,
+        // set a min blob size in bytes to so small transactions and effects are kept in sst files.
+        self.options.set_min_blob_size(min_blob_size);
 
+        // Increase write buffer size to 256MiB.
+        let write_buffer_size = read_size_from_env(ENV_VAR_MAX_WRITE_BUFFER_SIZE_MB)
+            .unwrap_or(DEFAULT_MAX_WRITE_BUFFER_SIZE_MB)
+            * 1024
+            * 1024;
+        self.options.set_write_buffer_size(write_buffer_size);
         // Since large blobs are not in sst files, reduce the target file size and base level
         // target size.
-        // Keep sst file size at 64MiB.
         let target_file_size_base = 64 << 20;
         self.options
             .set_target_file_size_base(target_file_size_base);
@@ -2105,7 +2351,7 @@ fn get_block_options(block_cache_size_mb: usize) -> BlockBasedOptions {
     // https://github.com/EighteenZi/rocksdb_wiki/blob/master/Memory-usage-in-RocksDB.md#indexes-and-filter-blocks
     block_options.set_block_size(16 * 1024);
     // Configure a block cache.
-    block_options.set_block_cache(&Cache::new_lru_cache(block_cache_size_mb << 20).unwrap());
+    block_options.set_block_cache(&Cache::new_lru_cache(block_cache_size_mb << 20));
     // Set a bloomfilter with 1% false positive rate.
     block_options.set_bloom_filter(10.0, false);
     // From https://github.com/EighteenZi/rocksdb_wiki/blob/master/Block-Cache.md#caching-index-and-filter-blocks
@@ -2349,4 +2595,56 @@ fn populate_missing_cfs(
             .map(|(name, opts)| (name.to_string(), (*opts).clone())),
     );
     Ok(cfs)
+}
+
+/// Given a vec<u8>, find the value which is one more than the vector
+/// if the vector was a big endian number.
+/// If the vector is already minimum, don't change it.
+fn big_endian_saturating_add_one(v: &mut Vec<u8>) {
+    if is_max(v) {
+        return;
+    }
+    for i in (0..v.len()).rev() {
+        if v[i] == u8::MAX {
+            v[i] = 0;
+        } else {
+            v[i] += 1;
+            break;
+        }
+    }
+}
+
+/// Check if all the bytes in the vector are 0xFF
+fn is_max(v: &[u8]) -> bool {
+    v.iter().all(|&x| x == u8::MAX)
+}
+
+#[allow(clippy::assign_op_pattern)]
+#[test]
+fn test_helpers() {
+    let v = vec![];
+    assert!(is_max(&v));
+
+    fn check_add(v: Vec<u8>) {
+        let mut v = v;
+        let num = Num32::from_big_endian(&v);
+        big_endian_saturating_add_one(&mut v);
+        assert!(num + 1 == Num32::from_big_endian(&v));
+    }
+
+    uint::construct_uint! {
+        // 32 byte number
+        #[cfg_attr(feature = "scale-info", derive(TypeInfo))]
+        struct Num32(4);
+    }
+
+    let mut v = vec![255; 32];
+    big_endian_saturating_add_one(&mut v);
+    assert!(Num32::MAX == Num32::from_big_endian(&v));
+
+    check_add(vec![1; 32]);
+    check_add(vec![6; 32]);
+    check_add(vec![254; 32]);
+
+    // TBD: More tests coming with randomized arrays
 }

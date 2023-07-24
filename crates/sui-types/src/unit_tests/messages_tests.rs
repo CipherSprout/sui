@@ -2,16 +2,9 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::hash_map::DefaultHasher;
-use std::collections::BTreeMap;
-
-use fastcrypto::traits::AggregateAuthenticator;
-use fastcrypto::traits::KeyPair;
-use move_core_types::language_storage::StructTag;
-use roaring::RoaringBitmap;
-
 use super::*;
 use crate::base_types::random_object_ref;
+use crate::committee::Committee;
 use crate::crypto::bcs_signable_test::{get_obligation_input, Foo};
 use crate::crypto::Secp256k1SuiSignature;
 use crate::crypto::SuiKeyPair;
@@ -22,7 +15,18 @@ use crate::crypto::{
     get_key_pair, AccountKeyPair, AuthorityKeyPair, AuthorityPublicKeyBytes,
     AuthoritySignInfoTrait, SuiAuthoritySignature,
 };
+use crate::digests::TransactionEventsDigest;
+use crate::effects::{SignedTransactionEffects, TransactionEffects, TransactionEffectsAPI};
+use crate::execution_status::ExecutionStatus;
+use crate::gas::GasCostSummary;
 use crate::object::Owner;
+use fastcrypto::traits::AggregateAuthenticator;
+use fastcrypto::traits::KeyPair;
+use move_core_types::language_storage::StructTag;
+use roaring::RoaringBitmap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
+use std::hash::Hasher;
 
 #[test]
 fn test_signed_values() {
@@ -56,7 +60,7 @@ fn test_signed_values() {
         Intent::sui_transaction(),
         vec![&sender_sec],
     )
-    .verify()
+    .verify(&Default::default())
     .unwrap();
 
     let bad_transaction = VerifiedTransaction::new_unchecked(Transaction::from_data_and_signer(
@@ -78,7 +82,9 @@ fn test_signed_values() {
         &sec1,
         AuthorityPublicKeyBytes::from(sec1.public()),
     );
-    assert!(v.verify(&committee).is_ok());
+    assert!(v
+        .verify_authenticated(&committee, &Default::default())
+        .is_ok());
 
     let v = SignedTransaction::new(
         committee.epoch(),
@@ -86,7 +92,9 @@ fn test_signed_values() {
         &sec2,
         AuthorityPublicKeyBytes::from(sec2.public()),
     );
-    assert!(v.verify(&committee).is_err());
+    assert!(v
+        .verify_authenticated(&committee, &Default::default())
+        .is_err());
 
     let v = SignedTransaction::new(
         committee.epoch(),
@@ -94,7 +102,9 @@ fn test_signed_values() {
         &sec3,
         AuthorityPublicKeyBytes::from(sec3.public()),
     );
-    assert!(v.verify(&committee).is_err());
+    assert!(v
+        .verify_authenticated(&committee, &Default::default())
+        .is_err());
 
     let v = SignedTransaction::new(
         committee.epoch(),
@@ -102,7 +112,9 @@ fn test_signed_values() {
         &sec1,
         AuthorityPublicKeyBytes::from(sec1.public()),
     );
-    assert!(v.verify(&committee).is_err());
+    assert!(v
+        .verify_authenticated(&committee, &Default::default())
+        .is_err());
 }
 
 #[test]
@@ -135,7 +147,7 @@ fn test_certificates() {
         Intent::sui_transaction(),
         vec![&sender_sec],
     )
-    .verify()
+    .verify(&Default::default())
     .unwrap();
 
     let v1 = SignedTransaction::new(
@@ -167,7 +179,9 @@ fn test_certificates() {
     sigs.push(v2.auth_sig().clone());
     let c =
         CertifiedTransaction::new(transaction.clone().into_message(), sigs, &committee).unwrap();
-    assert!(c.verify_signature(&committee).is_ok());
+    assert!(c
+        .verify_signatures_authenticated(&committee, &Default::default())
+        .is_ok());
 
     let sigs = vec![v1.auth_sig().clone(), v3.auth_sig().clone()];
 
@@ -470,7 +484,7 @@ fn test_digest_caching() {
         Intent::sui_transaction(),
         vec![&ssec2],
     )
-    .verify()
+    .verify(&Default::default())
     .unwrap();
 
     let mut signed_tx = SignedTransaction::new(
@@ -479,7 +493,9 @@ fn test_digest_caching() {
         &sec1,
         AuthorityPublicKeyBytes::from(sec1.public()),
     );
-    assert!(signed_tx.verify_signature(&committee).is_ok());
+    assert!(signed_tx
+        .verify_signatures_authenticated(&committee, &Default::default())
+        .is_ok());
 
     let initial_digest = *signed_tx.digest();
 
@@ -604,7 +620,7 @@ fn test_user_signature_committed_in_signed_transactions() {
         Intent::sui_transaction(),
         vec![&sender_sec],
     )
-    .verify()
+    .verify(&Default::default())
     .unwrap();
     // transaction_b intentionally invalid (sender does not match signer).
     let transaction_b = VerifiedTransaction::new_unchecked(Transaction::from_data_and_signer(
@@ -707,7 +723,7 @@ fn test_sponsored_transaction_message() {
         intent.clone(),
         vec![sender_sig.clone(), sponsor_sig.clone()],
     )
-    .verify()
+    .verify(&Default::default())
     .unwrap();
 
     assert_eq!(
@@ -724,7 +740,7 @@ fn test_sponsored_transaction_message() {
         intent.clone(),
         vec![sponsor_sig.clone(), sender_sig.clone()],
     )
-    .verify()
+    .verify(&Default::default())
     .unwrap();
 
     // Test incomplete signature lists (missing sponsor sig)
@@ -734,7 +750,7 @@ fn test_sponsored_transaction_message() {
             intent.clone(),
             vec![sender_sig.clone()],
         )
-        .verify()
+        .verify(&Default::default())
         .unwrap_err(),
         SuiError::SignerSignatureNumberMismatch { .. }
     ));
@@ -746,7 +762,7 @@ fn test_sponsored_transaction_message() {
             intent.clone(),
             vec![sponsor_sig.clone()],
         )
-        .verify()
+        .verify(&Default::default())
         .unwrap_err(),
         SuiError::SignerSignatureNumberMismatch { .. }
     ));
@@ -761,7 +777,7 @@ fn test_sponsored_transaction_message() {
             intent.clone(),
             vec![sender_sig, sponsor_sig.clone(), third_party_sig.clone()],
         )
-        .verify()
+        .verify(&Default::default())
         .unwrap_err(),
         SuiError::SignerSignatureNumberMismatch { .. }
     ));
@@ -769,7 +785,7 @@ fn test_sponsored_transaction_message() {
     // Test irrelevant sigs
     assert!(matches!(
         Transaction::from_generic_sig_data(tx_data, intent, vec![sponsor_sig, third_party_sig],)
-            .verify()
+            .verify(&Default::default())
             .unwrap_err(),
         SuiError::SignerSignatureAbsent { .. }
     ));
@@ -807,7 +823,7 @@ fn test_sponsored_transaction_validity_check() {
     };
     let kind = TransactionKind::programmable(pt);
     TransactionData::new_with_gas_data(kind, sender, gas_data.clone())
-        .validity_check(&ProtocolConfig::get_for_max_version())
+        .validity_check(&ProtocolConfig::get_for_max_version_UNSAFE())
         .unwrap();
 
     let pt = {
@@ -827,7 +843,7 @@ fn test_sponsored_transaction_validity_check() {
     };
     let kind = TransactionKind::programmable(pt);
     TransactionData::new_with_gas_data(kind, sender, gas_data.clone())
-        .validity_check(&ProtocolConfig::get_for_max_version())
+        .validity_check(&ProtocolConfig::get_for_max_version_UNSAFE())
         .unwrap();
 
     let pt = {
@@ -837,7 +853,7 @@ fn test_sponsored_transaction_validity_check() {
     };
     let kind = TransactionKind::programmable(pt);
     TransactionData::new_with_gas_data(kind, sender, gas_data.clone())
-        .validity_check(&ProtocolConfig::get_for_max_version())
+        .validity_check(&ProtocolConfig::get_for_max_version_UNSAFE())
         .unwrap();
 
     // Pay
@@ -854,7 +870,7 @@ fn test_sponsored_transaction_validity_check() {
     };
     let kind = TransactionKind::programmable(pt);
     TransactionData::new_with_gas_data(kind, sender, gas_data.clone())
-        .validity_check(&ProtocolConfig::get_for_max_version())
+        .validity_check(&ProtocolConfig::get_for_max_version_UNSAFE())
         .unwrap();
 
     // TransferSui
@@ -865,7 +881,7 @@ fn test_sponsored_transaction_validity_check() {
     };
     let kind = TransactionKind::programmable(pt);
     TransactionData::new_with_gas_data(kind, sender, gas_data.clone())
-        .validity_check(&ProtocolConfig::get_for_max_version())
+        .validity_check(&ProtocolConfig::get_for_max_version_UNSAFE())
         .unwrap();
 
     // PaySui
@@ -876,7 +892,7 @@ fn test_sponsored_transaction_validity_check() {
     };
     let kind = TransactionKind::programmable(pt);
     TransactionData::new_with_gas_data(kind, sender, gas_data.clone())
-        .validity_check(&ProtocolConfig::get_for_max_version())
+        .validity_check(&ProtocolConfig::get_for_max_version_UNSAFE())
         .unwrap();
 
     // PayAllSui
@@ -887,7 +903,7 @@ fn test_sponsored_transaction_validity_check() {
     };
     let kind = TransactionKind::programmable(pt);
     TransactionData::new_with_gas_data(kind, sender, gas_data)
-        .validity_check(&ProtocolConfig::get_for_max_version())
+        .validity_check(&ProtocolConfig::get_for_max_version_UNSAFE())
         .unwrap();
 }
 
@@ -932,7 +948,7 @@ fn verify_sender_signature_correctly_with_flag() {
 
     let transaction =
         Transaction::from_data_and_signer(tx_data, Intent::sui_transaction(), vec![&sender_kp])
-            .verify()
+            .verify(&Default::default())
             .unwrap();
 
     // create tx also signed by authority
@@ -962,7 +978,7 @@ fn verify_sender_signature_correctly_with_flag() {
 
     let transaction_1 =
         Transaction::from_data_and_signer(tx_data_2, Intent::sui_transaction(), vec![&sender_kp_2])
-            .verify()
+            .verify(&Default::default())
             .unwrap();
 
     let signed_tx_1 = SignedTransaction::new(
@@ -1005,8 +1021,8 @@ fn verify_sender_signature_correctly_with_flag() {
     let tx_32 = tx_3.clone();
 
     // r1 signature tx verifies ok
-    assert!(tx_3.verify().is_ok());
-    let verified_tx_3 = tx_31.verify().unwrap();
+    assert!(tx_3.verify(&Default::default()).is_ok());
+    let verified_tx_3 = tx_31.verify(&Default::default()).unwrap();
     // r1 signature verified and accepted by authority
     let signed_tx_3 = SignedTransaction::new(
         committee.epoch(),
@@ -1030,11 +1046,7 @@ fn test_change_epoch_transaction() {
     assert!(tx.contains_shared_object());
     assert_eq!(
         tx.shared_input_objects().next().unwrap(),
-        SharedInputObject {
-            id: SUI_SYSTEM_STATE_OBJECT_ID,
-            initial_shared_version: SUI_SYSTEM_STATE_OBJECT_SHARED_VERSION,
-            mutable: true,
-        }
+        SharedInputObject::SUI_SYSTEM_OBJ
     );
     assert!(tx.is_system_tx());
     assert_eq!(
@@ -1268,7 +1280,7 @@ fn test_certificate_digest() {
             Intent::sui_transaction(),
             vec![&sender_sec],
         )
-        .verify()
+        .verify(&Default::default())
         .unwrap()
     };
 
@@ -1293,7 +1305,8 @@ fn test_certificate_digest() {
 
         let cert = CertifiedTransaction::new(transaction.clone().into_message(), sigs, &committee)
             .unwrap();
-        cert.verify_signature(&committee).unwrap();
+        cert.verify_signatures_authenticated(&committee, &Default::default())
+            .unwrap();
         cert
     };
 
@@ -1335,6 +1348,11 @@ fn test_certificate_digest() {
 // If this test fails, the value of the constant must be increased
 #[test]
 fn check_approx_effects_components_size() {
+    use crate::effects::{
+        APPROX_SIZE_OF_EPOCH_ID, APPROX_SIZE_OF_EXECUTION_STATUS, APPROX_SIZE_OF_GAS_COST_SUMMARY,
+        APPROX_SIZE_OF_OBJECT_REF, APPROX_SIZE_OF_OPT_TX_EVENTS_DIGEST, APPROX_SIZE_OF_OWNER,
+        APPROX_SIZE_OF_TX_DIGEST,
+    };
     use std::mem::size_of;
 
     assert!(

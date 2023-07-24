@@ -5,6 +5,7 @@ use fastcrypto::encoding::Base58;
 use move_bytecode_utils::module_cache::GetModule;
 use move_core_types::identifier::Identifier;
 use move_core_types::language_storage::StructTag;
+use mysten_metrics::monitored_scope;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,6 +69,18 @@ impl From<EventEnvelope> for SuiEvent {
             parsed_json: ev.parsed_json,
             bcs: ev.event.contents,
             timestamp_ms: Some(ev.timestamp),
+        }
+    }
+}
+
+impl From<SuiEvent> for Event {
+    fn from(val: SuiEvent) -> Self {
+        Event {
+            package_id: val.package_id,
+            transaction_module: val.transaction_module,
+            sender: val.sender,
+            type_: val.type_,
+            contents: val.bcs,
         }
     }
 }
@@ -136,6 +149,15 @@ pub enum EventFilter {
         #[serde_as(as = "SuiStructTag")]
         StructTag,
     ),
+    /// Return events with the given move event module name
+    MoveEventModule {
+        /// the Move package ID
+        package: ObjectID,
+        /// the module name
+        #[schemars(with = "String")]
+        #[serde_as(as = "DisplayFromStr")]
+        module: Identifier,
+    },
     MoveEventField {
         path: String,
         value: Value,
@@ -191,6 +213,9 @@ impl EventFilter {
                     false
                 }
             }
+            EventFilter::MoveEventModule { package, module } => {
+                &item.type_.module == module && &ObjectID::from(item.type_.address) == package
+            }
         })
     }
 
@@ -204,6 +229,7 @@ impl EventFilter {
 
 impl Filter<SuiEvent> for EventFilter {
     fn matches(&self, item: &SuiEvent) -> bool {
+        let _scope = monitored_scope("EventFilter::matches");
         self.try_matches(item).unwrap_or_default()
     }
 }

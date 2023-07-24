@@ -9,14 +9,14 @@ import { useRpcClient } from '../api/RpcClientContext';
 import { formatAmount } from '../utils/formatAmount';
 
 type FormattedCoin = [
-    formattedBalance: string,
-    coinSymbol: string,
-    queryResult: UseQueryResult
+	formattedBalance: string,
+	coinSymbol: string,
+	queryResult: UseQueryResult<CoinMetadata | null>,
 ];
 
 export enum CoinFormat {
-    ROUNDED = 'ROUNDED',
-    FULL = 'FULL',
+	ROUNDED = 'ROUNDED',
+	FULL = 'FULL',
 }
 
 /**
@@ -25,83 +25,89 @@ export enum CoinFormat {
  * For values greater than 1, it will be truncated to 3 decimal places.
  */
 export function formatBalance(
-    balance: bigint | number | string,
-    decimals: number,
-    format: CoinFormat = CoinFormat.ROUNDED
+	balance: bigint | number | string,
+	decimals: number,
+	format: CoinFormat = CoinFormat.ROUNDED,
 ) {
-    const bn = new BigNumber(balance.toString()).shiftedBy(-1 * decimals);
+	const bn = new BigNumber(balance.toString()).shiftedBy(-1 * decimals);
 
-    if (format === CoinFormat.FULL) {
-        return bn.toFormat();
-    }
+	if (format === CoinFormat.FULL) {
+		return bn.toFormat();
+	}
 
-    return formatAmount(bn);
+	return formatAmount(bn);
 }
 
-export function useCoinDecimals(coinType?: string | null) {
-    const rpc = useRpcClient();
-    const queryResult = useQuery(
-        ['denomination', coinType],
-        async () => {
-            if (!coinType) {
-                throw new Error(
-                    'Fetching coin denomination should be disabled when coin type is disabled.'
-                );
-            }
+const ELLIPSIS = '\u{2026}';
+const SYMBOL_TRUNCATE_LENGTH = 5;
+const NAME_TRUNCATE_LENGTH = 10;
 
-            // Optimize the known case of SUI to avoid a network call:
-            if (coinType === SUI_TYPE_ARG) {
-                const metadata: CoinMetadata = {
-                    id: null,
-                    decimals: 9,
-                    description: '',
-                    iconUrl: null,
-                    name: 'Sui',
-                    symbol: 'SUI',
-                };
+export function useCoinMetadata(coinType?: string | null) {
+	const rpc = useRpcClient();
+	return useQuery({
+		queryKey: ['coin-metadata', coinType],
+		queryFn: async () => {
+			if (!coinType) {
+				throw new Error('Fetching coin metadata should be disabled when coin type is disabled.');
+			}
 
-                return metadata;
-            }
+			// Optimize the known case of SUI to avoid a network call:
+			if (coinType === SUI_TYPE_ARG) {
+				const metadata: CoinMetadata = {
+					id: null,
+					decimals: 9,
+					description: '',
+					iconUrl: null,
+					name: 'Sui',
+					symbol: 'SUI',
+				};
 
-            return rpc.getCoinMetadata({ coinType });
-        },
-        {
-            // This is currently expected to fail for non-SUI tokens, so disable retries:
-            retry: false,
-            enabled: !!coinType,
-            // Never consider this data to be stale:
-            staleTime: Infinity,
-            // Keep this data in the cache for 24 hours.
-            // We allow this to be GC'd after a very long time to avoid unbounded cache growth.
-            cacheTime: 24 * 60 * 60 * 1000,
-        }
-    );
+				return metadata;
+			}
 
-    return [queryResult.data?.decimals || 0, queryResult] as const;
+			return rpc.getCoinMetadata({ coinType });
+		},
+		select(data) {
+			if (!data) return null;
+
+			return {
+				...data,
+				symbol:
+					data.symbol.length > SYMBOL_TRUNCATE_LENGTH
+						? data.symbol.slice(0, SYMBOL_TRUNCATE_LENGTH) + ELLIPSIS
+						: data.symbol,
+				name:
+					data.name.length > NAME_TRUNCATE_LENGTH
+						? data.name.slice(0, NAME_TRUNCATE_LENGTH) + ELLIPSIS
+						: data.name,
+			};
+		},
+		retry: false,
+		enabled: !!coinType,
+		staleTime: Infinity,
+		cacheTime: 24 * 60 * 60 * 1000,
+	});
 }
 
 // TODO #1: This handles undefined values to make it easier to integrate with
 // the reset of the app as it is today, but it really shouldn't in a perfect world.
 export function useFormatCoin(
-    balance?: bigint | number | string | null,
-    coinType?: string | null,
-    format: CoinFormat = CoinFormat.ROUNDED
+	balance?: bigint | number | string | null,
+	coinType?: string | null,
+	format: CoinFormat = CoinFormat.ROUNDED,
 ): FormattedCoin {
-    const symbol = useMemo(
-        () => (coinType ? Coin.getCoinSymbol(coinType) : ''),
-        [coinType]
-    );
+	const fallbackSymbol = useMemo(() => (coinType ? Coin.getCoinSymbol(coinType) : ''), [coinType]);
 
-    const [decimals, queryResult] = useCoinDecimals(coinType);
-    const { isFetched } = queryResult;
+	const queryResult = useCoinMetadata(coinType);
+	const { isFetched, data } = queryResult;
 
-    const formatted = useMemo(() => {
-        if (typeof balance === 'undefined' || balance === null) return '';
+	const formatted = useMemo(() => {
+		if (typeof balance === 'undefined' || balance === null) return '';
 
-        if (!isFetched) return '...';
+		if (!isFetched) return '...';
 
-        return formatBalance(balance, decimals, format);
-    }, [decimals, isFetched, balance, format]);
+		return formatBalance(balance, data?.decimals ?? 0, format);
+	}, [data?.decimals, isFetched, balance, format]);
 
-    return [formatted, symbol, queryResult];
+	return [formatted, isFetched ? data?.symbol || fallbackSymbol : '', queryResult];
 }

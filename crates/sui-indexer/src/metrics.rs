@@ -16,13 +16,16 @@ const LATENCY_SEC_BUCKETS: &[f64] = &[
 #[derive(Clone)]
 pub struct IndexerMetrics {
     pub total_checkpoint_received: IntCounter,
-    pub total_checkpoint_committed: IntCounter,
+    pub total_tx_checkpoint_committed: IntCounter,
     pub total_object_checkpoint_committed: IntCounter,
     pub total_transaction_committed: IntCounter,
     pub total_object_change_committed: IntCounter,
+    // NOTE: *_chunk_commited counts number of DB commits
+    pub total_transaction_chunk_committed: IntCounter,
+    pub total_object_change_chunk_committed: IntCounter,
     pub total_epoch_committed: IntCounter,
     pub latest_fullnode_checkpoint_sequence_number: IntGauge,
-    pub latest_indexer_checkpoint_sequence_number: IntGauge,
+    pub latest_tx_checkpoint_sequence_number: IntGauge,
     pub latest_indexer_object_checkpoint_sequence_number: IntGauge,
     // checkpoint E2E latency is:
     // fullnode_download_latency + checkpoint_index_latency + db_commit_latency
@@ -59,6 +62,7 @@ pub struct IndexerMetrics {
     pub query_events_latency: Histogram,
     pub get_dynamic_fields_latency: Histogram,
     pub get_dynamic_field_object_latency: Histogram,
+    pub get_protocol_config_latency: Histogram,
 }
 
 impl IndexerMetrics {
@@ -70,7 +74,7 @@ impl IndexerMetrics {
                 registry,
             )
             .unwrap(),
-            total_checkpoint_committed: register_int_counter_with_registry!(
+            total_tx_checkpoint_committed: register_int_counter_with_registry!(
                 "total_checkpoint_committed",
                 "Total number of checkpoint committed",
                 registry,
@@ -94,6 +98,18 @@ impl IndexerMetrics {
                 registry,
             )
             .unwrap(),
+            total_transaction_chunk_committed: register_int_counter_with_registry!(
+                "total_transaction_chunk_commited",
+                "Total number of transaction chunk committed",
+                registry,
+            )
+            .unwrap(),
+            total_object_change_chunk_committed: register_int_counter_with_registry!(
+                "total_object_change_chunk_committed",
+                "Total number of object change chunk committed",
+                registry,
+            )
+            .unwrap(),
             total_epoch_committed: register_int_counter_with_registry!(
                 "total_epoch_committed",
                 "Total number of epoch committed",
@@ -106,7 +122,7 @@ impl IndexerMetrics {
                 registry,
             )
             .unwrap(),
-            latest_indexer_checkpoint_sequence_number: register_int_gauge_with_registry!(
+            latest_tx_checkpoint_sequence_number: register_int_gauge_with_registry!(
                 "latest_indexer_checkpoint_sequence_number",
                 "Latest checkpoint sequence number from the Indexer",
                 registry,
@@ -317,6 +333,13 @@ impl IndexerMetrics {
             get_loaded_child_objects_latency: register_histogram_with_registry!(
                 "get_loaded_child_objects_latency",
                 "Time spent in get_loaded_child_objects_latency on the fullnode behind.",
+                LATENCY_SEC_BUCKETS.to_vec(),
+                registry
+            )
+            .unwrap(),
+            get_protocol_config_latency: register_histogram_with_registry!(
+                "get_protocol_config_latency",
+                "Time spent in get_protocol_config_latency on the fullnode behind.",
                 LATENCY_SEC_BUCKETS.to_vec(),
                 registry
             )

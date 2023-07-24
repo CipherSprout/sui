@@ -1,5 +1,113 @@
 # @mysten/sui.js
 
+## 0.37.1
+
+### Patch Changes
+
+- 34cc7d610: Fix unhandled rejections thrown by waitForTransaction
+
+## 0.37.0
+
+### Minor Changes
+
+- 93794f9f2: Update build to avoid bundling for better modularity
+- a17d3678a: Add keypair exports to allow modular imports for various keypair types
+
+### Patch Changes
+
+- 36f2edff3: Use splitGenericParamaters util from bcs
+- 75d1a190d: Fix bug that prevented deserializing transaction blocks with a set expiration
+- c3a4ec57c: Add explicit dependency on events package
+- 2f37537d5: Update `SuiEventFilter` structure for `TimeRange` query.
+- 00484bcc3: add method to create Ed25519Keypair from a mnemonic seed
+- Updated dependencies [36f2edff3]
+  - @mysten/bcs@0.7.3
+
+## 0.36.0
+
+### Minor Changes
+
+- 3ea9adb71a: Add multisig support
+- 1cfb1c9da3: The `TransactionBlock` builder now uses the protocol config from the chain when constructing and validating transactions, instead of using hard-coded limits. If you wish to perform signing offline (without a provider), you can either define a `protocolConfig` option when building a transaction, or explicitly set `limits`, which will be used instead of the protocol config.
+- fb3bb9118a: Remove logging of RPCValidation errors when typescript types do not match RPC response types
+
+### Patch Changes
+
+- 1cfb1c9da3: Added `getProtocolConfig()` method to the provider.
+- Updated dependencies [ca5c72815d]
+- Updated dependencies [fdb569464e]
+  - @mysten/bcs@0.7.2
+
+## 0.35.1
+
+### Patch Changes
+
+- 09d77325a9: Add new SuiNS Toolkit package.
+
+## 0.35.0
+
+### Minor Changes
+
+- 470c27af50: Added network address metrics
+- 671faefe3c: Add `getChainIdentifier` method
+- 9ce7e051b4: Update internal client to use `@open-rpc/client-js` instead of `jayson` and `rpc-websockets`. This results in a more consistent experience and better error messaging.
+
+### Patch Changes
+
+- 4ea96d909a: the event BCS data is a base64 string
+- bcbb178c44: Fixes BCS definition so it matches the RPC one
+- 03828224c9: Previously, effects had an unwrapped_then_deleted field on ts-sdk. This is an issue since jsonrpc returns the field as unwrappedThenDeleted. Update the transaction type definition to use camelcase.
+- 9ce7e051b4: Add `subscribeTransaction` method.
+- bb50698551: Fixes BCS type definition in the type layout
+
+## 0.34.1
+
+### Patch Changes
+
+- 85719ac933: Add `tryGetPastObject` support in the provider.
+- c3d9cc87f3: Update ts-sdk e2e test to reflect new rpc error language
+- 02a6063f82: Add `normalizeStructTag` and `parseStructTag` helper functions
+
+## 0.34.0
+
+### Minor Changes
+
+- 280821e0ab: Add "mainnet" connection to the list of available connections
+
+### Patch Changes
+
+- 6a9abe9e38: Fix `type` field in MakeMoveVec
+
+## 0.33.0
+
+### Minor Changes
+
+- 7915de531: Strip disassembled modules from publish/upgrade transaction inputs.
+- e61ed2bac: Added new TransactionFilter fields
+
+### Patch Changes
+
+- 6f9fc94ca: Increase max size of pure inputs
+- 605eac8c6: Bugfix for makeMoveVec when not providing type arguments.
+- 262e3dfdd: Add support for account switching in Wallet Kit.
+- 91c63e4f8: Fix transaction building with >50 input objects.
+- 5053a8dc8: Add getValidatorsApy to rpc
+
+## 0.32.2
+
+### Patch Changes
+
+- 4ae3cbea3: Response for `getCoinMetadata` is now nullable, in the event that no metadata can be found.
+- d2755a496: Fix dependency on msw
+- f612dac98: Change the default gas budgeting to take storage rebates into account.
+- c219e7470: Changed the response type of `getRpcApiVersion` to string.
+- 59ae0e7d6: Removed `skipDataValidation` option, this is now not configurable and is the default behavior.
+- c219e7470: Fix type of `limit` on `getCheckpoints` and `getEpochs` API so that is correctly a number.
+- 4e463c691: Add `waitForTransactionBlock` API to wait for a transaction to be available over the API.
+- b4f0bfc76: Fix type definitions for package exports.
+- Updated dependencies [b4f0bfc76]
+  - @mysten/bcs@0.7.1
+
 ## 0.32.1
 
 ### Patch Changes
@@ -127,7 +235,7 @@
 
 ### Minor Changes
 
-- a67cc044b: Transaction signatures are now serialized into a single string, and all APIs that previously took the public key, signature, and scheme now just take the single serialized signature string. To help make parsing this easier, there are new `toSerializedSignature` and `fromSerializedSignature` methods exposed as well.
+- a67cc044b: Transaction signatures are now serialized into a single string, and all APIs that previously took the public key, signature, and scheme now just take the single serialized signature string. To help make parsing this easier, there are new `toSerializedSignature` and `toParsedSignaturePubkeyPair` methods exposed as well.
 - a67cc044b: The RawSigner now provides a `signTransaction` function, which can be used to sign a transaction without submitting it to the network.
 - a67cc044b: The RawSigner now provides a `signMessage` function that can be used to sign personal messages. The SDK also now exports a `verifyMessage` function that can be used to easily verify a message signed with `signMessage`.
 

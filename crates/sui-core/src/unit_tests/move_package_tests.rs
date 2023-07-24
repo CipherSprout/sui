@@ -3,19 +3,17 @@
 
 use move_binary_format::file_format::CompiledModule;
 
-use sui_adapter::adapter::{default_verifier_config, run_metered_move_bytecode_verifier_impl};
-use sui_framework_build::compiled_package::{BuildConfig, CompiledPackage};
-use sui_protocol_config::ProtocolConfig;
+use std::{collections::BTreeMap, path::PathBuf};
+use sui_move_build::{BuildConfig, CompiledPackage};
+use sui_protocol_config::{Chain, ProtocolConfig};
 use sui_types::{
     base_types::ObjectID,
     digests::TransactionDigest,
-    error::{ExecutionErrorKind, SuiError},
-    messages::PackageUpgradeError,
+    error::ExecutionErrorKind,
+    execution_status::PackageUpgradeError,
     move_package::{MovePackage, TypeOrigin, UpgradeInfo},
     object::{Data, Object, OBJECT_START_VERSION},
 };
-
-use std::{collections::BTreeMap, path::PathBuf};
 
 macro_rules! type_origin_table {
     {} => { Vec::new() };
@@ -106,7 +104,7 @@ fn test_upgraded() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -134,7 +132,7 @@ fn test_depending_on_upgrade() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -159,7 +157,7 @@ fn test_upgrade_upgrades_linkage() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -171,7 +169,7 @@ fn test_upgrade_upgrades_linkage() {
         .new_upgraded(
             b_id2,
             &build_test_modules("B"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [&c_new],
         )
         .unwrap();
@@ -201,7 +199,7 @@ fn test_upgrade_linkage_digest_to_new_dep() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -213,7 +211,7 @@ fn test_upgrade_linkage_digest_to_new_dep() {
         .new_upgraded(
             b_id2,
             &build_test_modules("B"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [&c_new],
         )
         .unwrap();
@@ -227,8 +225,9 @@ fn test_upgrade_linkage_digest_to_new_dep() {
 
     // Make sure that we compute the package digest off of the update dependencies and not the old
     // dependencies in the linkage table.
+    let hash_modules = true;
     assert_eq!(
-        b_new.digest(),
+        b_new.digest(hash_modules),
         MovePackage::compute_digest_for_modules_and_deps(
             &build_test_modules("B")
                 .iter()
@@ -238,7 +237,8 @@ fn test_upgrade_linkage_digest_to_new_dep() {
                     bytes
                 })
                 .collect::<Vec<_>>(),
-            [&c_id2]
+            [&c_id2],
+            hash_modules,
         )
     )
 }
@@ -253,7 +253,7 @@ fn test_upgrade_downngrades_linkage() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -265,7 +265,7 @@ fn test_upgrade_downngrades_linkage() {
         .new_upgraded(
             b_id2,
             &build_test_modules("B"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [&c_pkg],
         )
         .unwrap();
@@ -295,7 +295,7 @@ fn test_transitively_depending_on_upgrade() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -324,7 +324,7 @@ fn package_digest_changes_with_dep_upgrades_and_in_sync_with_move_package_digest
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -333,12 +333,15 @@ fn package_digest_changes_with_dep_upgrades_and_in_sync_with_move_package_digest
 
     let b_v2 = MovePackage::new_initial(&build_test_modules("Bv2"), u64::MAX, [&c_v2]).unwrap();
 
-    let local_v1 = build_test_package("B").get_package_digest(false);
-    let local_v2 = build_test_package("Bv2").get_package_digest(false);
+    let with_unpublished_deps = false;
+    let hash_modules = true;
+    let local_v1 = build_test_package("B").get_package_digest(with_unpublished_deps, hash_modules);
+    let local_v2 =
+        build_test_package("Bv2").get_package_digest(with_unpublished_deps, hash_modules);
 
-    assert_ne!(b_pkg.digest(), b_v2.digest());
-    assert_eq!(b_pkg.digest(), local_v1);
-    assert_eq!(b_v2.digest(), local_v2);
+    assert_ne!(b_pkg.digest(hash_modules), b_v2.digest(hash_modules));
+    assert_eq!(b_pkg.digest(hash_modules), local_v1);
+    assert_eq!(b_v2.digest(hash_modules), local_v2);
     assert_ne!(local_v1, local_v2);
 }
 
@@ -381,7 +384,7 @@ fn test_fail_on_transitive_dependency_downgrade() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv2"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap();
@@ -406,7 +409,7 @@ fn test_fail_on_upgrade_missing_type() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv1"),
-            &ProtocolConfig::get_for_max_version(),
+            &ProtocolConfig::get_for_max_version_UNSAFE(),
             [],
         )
         .unwrap_err();
@@ -423,7 +426,7 @@ fn test_fail_on_upgrade_missing_type() {
         .new_upgraded(
             c_id2,
             &build_test_modules("Cv1"),
-            &ProtocolConfig::get_for_version(4.into()),
+            &ProtocolConfig::get_for_version(4.into(), Chain::Unknown),
             [],
         )
         .unwrap_err();
@@ -431,10 +434,9 @@ fn test_fail_on_upgrade_missing_type() {
 }
 
 pub fn build_test_package(test_dir: &str) -> CompiledPackage {
-    let build_config = BuildConfig::new_for_testing();
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.extend(["src", "unit_tests", "data", "move_package", test_dir]);
-    sui_framework::build_move_package(&path, build_config).unwrap()
+    BuildConfig::new_for_testing().build(path).unwrap()
 }
 
 pub fn build_test_modules(test_dir: &str) -> Vec<CompiledModule> {
@@ -442,39 +444,4 @@ pub fn build_test_modules(test_dir: &str) -> Vec<CompiledModule> {
         .get_modules()
         .cloned()
         .collect()
-}
-
-#[tokio::test]
-async fn test_metered_move_bytecode_verifier() {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sui-framework/packages/sui-framework");
-    let compiled_package =
-        sui_framework::build_move_package(&path, BuildConfig::new_for_testing()).unwrap();
-    let compiled_modules_bytes: Vec<_> = compiled_package.get_modules().cloned().collect();
-
-    let mut metered_verifier_config = default_verifier_config(
-        &ProtocolConfig::get_for_max_version(),
-        true, /* enable metering */
-    );
-
-    // Default case should pass
-    let r =
-        run_metered_move_bytecode_verifier_impl(&compiled_modules_bytes, &metered_verifier_config);
-    assert!(r.is_ok());
-
-    // Use low limits. Should fail
-    metered_verifier_config.max_back_edges_per_function = Some(100);
-    metered_verifier_config.max_back_edges_per_module = Some(1_000);
-    metered_verifier_config.max_per_mod_meter_units = Some(10_000);
-    metered_verifier_config.max_per_fun_meter_units = Some(10_000);
-
-    let r =
-        run_metered_move_bytecode_verifier_impl(&compiled_modules_bytes, &metered_verifier_config);
-
-    assert!(
-        r.unwrap_err()
-            == SuiError::ModuleVerificationFailure {
-                error: "Verification timedout".to_string()
-            }
-    );
 }

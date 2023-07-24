@@ -16,7 +16,7 @@ pub struct P2pConfig {
     /// This will be shared with other peers through the discovery service
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_address: Option<Multiaddr>,
-    /// SeedPeers configured with a PeerId are preferred and the node will always try to ensure a
+    /// SeedPeers are preferred and the node will always try to ensure a
     /// connection is established with these nodes.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub seed_peers: Vec<SeedPeer>,
@@ -59,6 +59,11 @@ impl P2pConfig {
         self.excessive_message_size
             .unwrap_or(EXCESSIVE_MESSAGE_SIZE)
     }
+
+    pub fn set_discovery_config(mut self, discovery_config: DiscoveryConfig) -> Self {
+        self.discovery = Some(discovery_config);
+        self
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -67,6 +72,14 @@ pub struct SeedPeer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peer_id: Option<anemo::PeerId>,
     pub address: Multiaddr,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct AllowlistedPeer {
+    pub peer_id: anemo::PeerId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<Multiaddr>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -102,6 +115,14 @@ pub struct StateSyncConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checkpoint_content_download_concurrency: Option<usize>,
 
+    /// Set the upper bound on the number of individual transactions contained in checkpoint
+    /// contents to be downloaded concurrently. If both this value and
+    /// `checkpoint_content_download_concurrency` are set, the lower of the two will apply.
+    ///
+    /// If unspecified, this will default to `50,000`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_content_download_tx_concurrency: Option<u64>,
+
     /// Set the timeout that should be used when sending most state-sync RPC requests.
     ///
     /// If unspecified, this will default to `10,000` milliseconds.
@@ -131,6 +152,19 @@ pub struct StateSyncConfig {
     /// If unspecified, this will default to no limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub get_checkpoint_contents_rate_limit: Option<NonZeroU32>,
+
+    /// Per-peer inflight limit for the GetCheckpointContents RPC.
+    ///
+    /// If unspecified, this will default to no limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub get_checkpoint_contents_inflight_limit: Option<usize>,
+
+    /// Per-checkpoint inflight limit for the GetCheckpointContents RPC. This is enforced globally
+    /// across all peers.
+    ///
+    /// If unspecified, this will default to no limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub get_checkpoint_contents_per_checkpoint_limit: Option<usize>,
 }
 
 impl StateSyncConfig {
@@ -167,6 +201,13 @@ impl StateSyncConfig {
             .unwrap_or(CHECKPOINT_CONTENT_DOWNLOAD_CONCURRENCY)
     }
 
+    pub fn checkpoint_content_download_tx_concurrency(&self) -> u64 {
+        const CHECKPOINT_CONTENT_DOWNLOAD_TX_CONCURRENCY: u64 = 50_000;
+
+        self.checkpoint_content_download_tx_concurrency
+            .unwrap_or(CHECKPOINT_CONTENT_DOWNLOAD_TX_CONCURRENCY)
+    }
+
     pub fn timeout(&self) -> Duration {
         const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -182,6 +223,20 @@ impl StateSyncConfig {
             .map(Duration::from_millis)
             .unwrap_or(DEFAULT_TIMEOUT)
     }
+}
+
+/// Access Type of a node.
+/// AccessType info is shared in the discovery process.
+/// * If the node marks itself as Public, other nodes may try to connect to it.
+/// * If the node marks itself as Private, only nodes that have it in
+///     their `allowlisted_peers` or `seed_peers` will try to connect to it.
+/// * If not set, defaults to Public.
+/// AccessType is useful when a network of nodes want to stay private. To achieve this,
+/// mark every node in this network as `Private` and allowlist/seed them to each other.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AccessType {
+    Public,
+    Private,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -213,6 +268,20 @@ pub struct DiscoveryConfig {
     /// If unspecified, this will default to no limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub get_known_peers_rate_limit: Option<NonZeroU32>,
+
+    /// See docstring for `AccessType`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_type: Option<AccessType>,
+
+    /// Like `seed_peers` in `P2pConfig`, allowlisted peers will awlays be allowed to establish
+    /// connection with this node regardless of the concurrency limit.
+    /// Unlike `seed_peers`, a node does not reach out to `allowlisted_peers` preferentially.
+    /// It is also used to determine if a peer is accessible when its AccessType is Private.
+    /// For example, a node will ignore a peer with Private AccessType if the peer is not in
+    /// its `allowlisted_peers`. Namely, the node will not try to establish connections
+    /// to this peer, nor advertise this peer's info to other peers in the network.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub allowlisted_peers: Vec<AllowlistedPeer>,
 }
 
 impl DiscoveryConfig {
@@ -233,5 +302,10 @@ impl DiscoveryConfig {
         const PEERS_TO_QUERY: usize = 1;
 
         self.peers_to_query.unwrap_or(PEERS_TO_QUERY)
+    }
+
+    pub fn access_type(&self) -> AccessType {
+        // defaults None to Public
+        self.access_type.unwrap_or(AccessType::Public)
     }
 }

@@ -27,9 +27,9 @@ use sui_types::base_types::{ObjectDigest, ObjectID, SequenceNumber, SuiAddress};
 use sui_types::crypto::AggregateAuthoritySignature;
 use sui_types::digests::TransactionDigest;
 use sui_types::gas_coin::GasCoin;
-use sui_types::messages::{TransactionData, TEST_ONLY_GAS_UNIT_FOR_TRANSFER};
 use sui_types::messages_checkpoint::CheckpointDigest;
 use sui_types::object::Object;
+use sui_types::transaction::{TransactionData, TEST_ONLY_GAS_UNIT_FOR_TRANSFER};
 
 fn indexer_benchmark(c: &mut Criterion) {
     let pg_host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".into());
@@ -37,23 +37,20 @@ fn indexer_benchmark(c: &mut Criterion) {
     let pw = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "postgrespw".into());
     let db_url = format!("postgres://postgres:{pw}@{pg_host}:{pg_port}");
 
-    let rt = Runtime::new().unwrap();
-    let (mut checkpoints, store) = rt.block_on(async {
-        let (blocking_cp, async_cp) = new_pg_connection_pool(&db_url).await.unwrap();
+    let rt: Runtime = Runtime::new().unwrap();
+    let (mut _checkpoints, store) = rt.block_on(async {
+        let blocking_cp = new_pg_connection_pool(&db_url).unwrap();
         reset_database(&mut blocking_cp.get().unwrap(), true).unwrap();
         let registry = Registry::default();
         let indexer_metrics = IndexerMetrics::new(&registry);
 
-        let store = PgIndexerStore::new(async_cp, blocking_cp, indexer_metrics).await;
+        let store = PgIndexerStore::new(blocking_cp, indexer_metrics);
 
         let checkpoints = (0..150).map(create_checkpoint).collect::<Vec<_>>();
         (checkpoints, store)
     });
 
-    c.bench_function("persist_checkpoint", |b| {
-        b.iter(|| rt.block_on(store.persist_all_checkpoint_data(&checkpoints.pop().unwrap())))
-    });
-
+    // TODO(gegaowp): add updated data ingestion benchmarking steps here.
     let mut checkpoints = (20..100).cycle().map(CheckpointId::SequenceNumber);
     c.bench_function("get_checkpoint", |b| {
         b.to_async(Runtime::new().unwrap())
@@ -77,6 +74,8 @@ fn create_checkpoint(sequence_number: i64) -> TemporaryCheckpointStore {
             total_storage_rebate: i64::MAX,
             total_transaction_blocks: 1000,
             total_transactions: 1000,
+            total_successful_transaction_blocks: 1000,
+            total_successful_transactions: 1000,
             network_total_transactions: 0,
             timestamp_ms: Utc::now().timestamp_millis(),
         },
@@ -88,9 +87,9 @@ fn create_checkpoint(sequence_number: i64) -> TemporaryCheckpointStore {
             changed_objects: (1..1000).map(|_| create_object(sequence_number)).collect(),
             deleted_objects: vec![],
         }],
-        addresses: vec![],
         packages: vec![],
         input_objects: vec![],
+        changed_objects: vec![],
         move_calls: vec![],
         recipients: vec![],
     }
@@ -117,17 +116,11 @@ fn create_transaction(sequence_number: i64) -> Transaction {
         id: None,
         transaction_digest: TransactionDigest::random().base58_encode(),
         sender: SuiAddress::random_for_testing_only().to_string(),
-        recipients: vec![],
         checkpoint_sequence_number: Some(sequence_number),
         timestamp_ms: Some(Utc::now().timestamp_millis()),
         transaction_kind: "test".to_string(),
         transaction_count: 0,
-        created: vec![],
-        mutated: vec![],
-        deleted: vec![],
-        unwrapped: vec![],
-        wrapped: vec![],
-        move_calls: vec![],
+        execution_success: true,
         gas_object_id: ObjectID::random().to_string(),
         gas_object_sequence: 0,
         gas_object_digest: ObjectDigest::random().base58_encode(),
@@ -139,7 +132,6 @@ fn create_transaction(sequence_number: i64) -> Transaction {
         non_refundable_storage_fee: 0,
         gas_price: 0,
         raw_transaction: bcs::to_bytes(&tx).unwrap(),
-        transaction_content: serde_json::to_string(&tx).unwrap(),
         transaction_effects_content: "".to_string(),
         confirmed_local_execution: None,
     }

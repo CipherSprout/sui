@@ -14,6 +14,7 @@ module sui_system::validator {
     use std::option::{Option, Self};
     use sui_system::staking_pool::{Self, PoolTokenExchangeRate, StakedSui, StakingPool};
     use std::string::{Self, String};
+    use sui::transfer;
     use sui::url::Url;
     use sui::url;
     use sui::event;
@@ -79,10 +80,17 @@ module sui_system::validator {
     /// Capability code is not valid
     const EInvalidCap: u64 = 101;
 
+    /// Validator trying to set gas price higher than threshold.
+    const EGasPriceHigherThanThreshold: u64 = 102;
 
-    const MAX_COMMISSION_RATE: u64 = 10_000; // Max rate is 100%, which is 10K base points
+    // TODO: potentially move this value to onchain config.
+    const MAX_COMMISSION_RATE: u64 = 2_000; // Max rate is 20%, which is 2000 base points
 
     const MAX_VALIDATOR_METADATA_LENGTH: u64 = 256;
+
+    // TODO: Move this to onchain config when we have a good way to do it.
+    /// Max gas price a validator can set is 100K MIST.
+    const MAX_VALIDATOR_GAS_PRICE: u64 = 100_000;
 
     struct ValidatorMetadata has store {
         /// The Sui Address of the validator. This is the sender that created the Validator object,
@@ -244,6 +252,7 @@ module sui_system::validator {
             EValidatorMetadataExceedingLengthLimit
         );
         assert!(commission_rate <= MAX_COMMISSION_RATE, ECommissionRateTooHigh);
+        assert!(gas_price < MAX_VALIDATOR_GAS_PRICE, EGasPriceHigherThanThreshold);
 
         let metadata = new_metadata(
             sui_address,
@@ -294,12 +303,12 @@ module sui_system::validator {
         stake: Balance<SUI>,
         staker_address: address,
         ctx: &mut TxContext,
-    ) {
+    ) : StakedSui {
         let stake_amount = balance::value(&stake);
         assert!(stake_amount > 0, EInvalidStakeAmount);
         let stake_epoch = tx_context::epoch(ctx) + 1;
-        staking_pool::request_add_stake(
-            &mut self.staking_pool, stake, staker_address, stake_epoch, ctx
+        let staked_sui = staking_pool::request_add_stake(
+            &mut self.staking_pool, stake, stake_epoch, ctx
         );
         // Process stake right away if staking pool is preactive.
         if (staking_pool::is_preactive(&self.staking_pool)) {
@@ -315,6 +324,7 @@ module sui_system::validator {
                 amount: stake_amount,
             }
         );
+        staked_sui
     }
 
     /// Request to add stake to the validator's staking pool at genesis
@@ -328,13 +338,14 @@ module sui_system::validator {
         let stake_amount = balance::value(&stake);
         assert!(stake_amount > 0, EInvalidStakeAmount);
 
-        staking_pool::request_add_stake(
+        let staked_sui = staking_pool::request_add_stake(
             &mut self.staking_pool,
             stake,
-            staker_address,
             0, // epoch 0 -- genesis
             ctx
         );
+
+        transfer::public_transfer(staked_sui, staker_address);
 
         // Process stake right away
         staking_pool::process_pending_stake(&mut self.staking_pool);
@@ -346,11 +357,12 @@ module sui_system::validator {
         self: &mut Validator,
         staked_sui: StakedSui,
         ctx: &mut TxContext,
-    ) {
+    ) : Balance<SUI> {
         let principal_amount = staking_pool::staked_sui_amount(&staked_sui);
         let stake_activation_epoch = staking_pool::stake_activation_epoch(&staked_sui);
-        let withdraw_amount = staking_pool::request_withdraw_stake(
+        let withdrawn_stake = staking_pool::request_withdraw_stake(
                 &mut self.staking_pool, staked_sui, ctx);
+        let withdraw_amount = balance::value(&withdrawn_stake);
         let reward_amount = withdraw_amount - principal_amount;
         self.next_epoch_stake = self.next_epoch_stake - withdraw_amount;
         event::emit(
@@ -363,7 +375,8 @@ module sui_system::validator {
                 principal_amount,
                 reward_amount,
             }
-        )
+        );
+        withdrawn_stake
     }
 
     /// Request to set new gas price for the next epoch.
@@ -373,6 +386,7 @@ module sui_system::validator {
         verified_cap: ValidatorOperationCap,
         new_price: u64,
     ) {
+        assert!(new_price < MAX_VALIDATOR_GAS_PRICE, EGasPriceHigherThanThreshold);
         let validator_address = *validator_cap::verified_operation_cap_address(&verified_cap);
         assert!(validator_address == self.metadata.sui_address, EInvalidCap);
         self.next_epoch_gas_price = new_price;
@@ -385,6 +399,7 @@ module sui_system::validator {
         new_price: u64
     ) {
         assert!(is_preactive(self), ENotValidatorCandidate);
+        assert!(new_price < MAX_VALIDATOR_GAS_PRICE, EGasPriceHigherThanThreshold);
         let validator_address = *validator_cap::verified_operation_cap_address(&verified_cap);
         assert!(validator_address == self.metadata.sui_address, EInvalidCap);
         self.next_epoch_gas_price = new_price;
@@ -863,8 +878,7 @@ module sui_system::validator {
         // TODO: specify actual function behavior
      }
 
-    #[test_only]
-    public fun get_staking_pool_ref(self: &Validator) : &StakingPool {
+    public(friend) fun get_staking_pool_ref(self: &Validator) : &StakingPool {
         &self.staking_pool
     }
 

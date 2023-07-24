@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::executor::block_on;
 use futures::future::join_all;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::http_client::HttpClient;
@@ -13,24 +12,20 @@ use jsonrpsee::types::SubscriptionResult;
 use jsonrpsee::{RpcModule, SubscriptionSink};
 
 use move_core_types::identifier::Identifier;
-use sui_core::event_handler::EventHandler;
-use sui_json_rpc::api::{
-    validate_limit, IndexerApiClient, IndexerApiServer, QUERY_MAX_RESULT_LIMIT,
-    QUERY_MAX_RESULT_LIMIT_OBJECTS,
-};
+use sui_core::subscription_handler::SubscriptionHandler;
+use sui_json_rpc::api::{cap_page_limit, IndexerApiClient, IndexerApiServer};
 use sui_json_rpc::indexer_api::spawn_subscription;
 use sui_json_rpc::SuiRpcModule;
 use sui_json_rpc_types::{
     DynamicFieldPage, EventFilter, EventPage, ObjectsPage, Page, SuiObjectDataFilter,
     SuiObjectResponse, SuiObjectResponseQuery, SuiTransactionBlockResponseQuery,
-    TransactionBlocksPage,
+    TransactionBlocksPage, TransactionFilter,
 };
 use sui_open_rpc::Module;
 use sui_types::base_types::{ObjectID, SuiAddress};
 use sui_types::digests::TransactionDigest;
 use sui_types::dynamic_field::DynamicFieldName;
 use sui_types::event::EventID;
-use sui_types::query::TransactionFilter;
 
 use crate::errors::IndexerError;
 use crate::store::IndexerStore;
@@ -38,7 +33,7 @@ use crate::store::IndexerStore;
 pub(crate) struct IndexerApi<S> {
     state: S,
     fullnode: HttpClient,
-    event_handler: Arc<EventHandler>,
+    subscription_handler: Arc<SubscriptionHandler>,
     migrated_methods: Vec<String>,
 }
 
@@ -46,13 +41,13 @@ impl<S: IndexerStore> IndexerApi<S> {
     pub fn new(
         state: S,
         fullnode_client: HttpClient,
-        event_handler: Arc<EventHandler>,
+        subscription_handler: Arc<SubscriptionHandler>,
         migrated_methods: Vec<String>,
     ) -> Self {
         Self {
             state,
             fullnode: fullnode_client,
-            event_handler,
+            subscription_handler,
             migrated_methods,
         }
     }
@@ -76,7 +71,7 @@ impl<S: IndexerStore> IndexerApi<S> {
         limit: Option<usize>,
         descending_order: Option<bool>,
     ) -> Result<TransactionBlocksPage, IndexerError> {
-        let limit = validate_limit(limit, QUERY_MAX_RESULT_LIMIT)?;
+        let limit = cap_page_limit(limit);
         let is_descending = descending_order.unwrap_or_default();
         let cursor_str = cursor.map(|digest| digest.to_string());
         let mut tx_vec_from_db = match query.filter {
@@ -160,8 +155,9 @@ impl<S: IndexerStore> IndexerApi<S> {
                     .get_transaction_sequence_by_digest(cursor_str, is_descending)
                     .await?;
                 self.state
-                    .get_transaction_page_by_mutated_object(
-                        mutated_obj_id.to_string(),
+                    .get_transaction_page_by_changed_object(
+                        mutated_obj_id,
+                        None,
                         indexer_seq_number,
                         limit + 1,
                         is_descending,
@@ -189,7 +185,7 @@ impl<S: IndexerStore> IndexerApi<S> {
                     .get_recipient_sequence_by_digest(cursor_str, is_descending)
                     .await?;
                 self.state
-                    .get_transaction_page_by_sender_recipient_address(
+                    .get_transaction_page_by_recipient_address(
                         /* from */ None,
                         recipient_address,
                         recipient_seq_number,
@@ -204,7 +200,7 @@ impl<S: IndexerStore> IndexerApi<S> {
                     .get_recipient_sequence_by_digest(cursor_str, is_descending)
                     .await?;
                 self.state
-                    .get_transaction_page_by_sender_recipient_address(
+                    .get_transaction_page_by_recipient_address(
                         Some(from),
                         to,
                         recipient_seq_number,
@@ -213,14 +209,37 @@ impl<S: IndexerStore> IndexerApi<S> {
                     )
                     .await
             }
+            Some(TransactionFilter::FromOrToAddress { addr }) => {
+                let start_sequence = self
+                    .state
+                    .get_recipient_sequence_by_digest(cursor_str, is_descending)
+                    .await?;
+                self.state
+                    .get_transaction_page_by_address(addr, start_sequence, limit + 1, is_descending)
+                    .await
+            }
             Some(TransactionFilter::TransactionKind(tx_kind_name)) => {
                 let indexer_seq_number = self
                     .state
                     .get_transaction_sequence_by_digest(cursor_str, is_descending)
                     .await?;
                 self.state
-                    .get_transaction_page_by_transaction_kind(
-                        tx_kind_name,
+                    .get_transaction_page_by_transaction_kinds(
+                        vec![tx_kind_name],
+                        indexer_seq_number,
+                        limit + 1,
+                        is_descending,
+                    )
+                    .await
+            }
+            Some(TransactionFilter::TransactionKindIn(tx_kind_names)) => {
+                let indexer_seq_number = self
+                    .state
+                    .get_transaction_sequence_by_digest(cursor_str, is_descending)
+                    .await?;
+                self.state
+                    .get_transaction_page_by_transaction_kinds(
+                        tx_kind_names,
                         indexer_seq_number,
                         limit + 1,
                         is_descending,
@@ -286,7 +305,7 @@ impl<S: IndexerStore> IndexerApi<S> {
             None => Ok((address, None)),
         }?;
         let options = options.unwrap_or_default();
-        let limit = validate_limit(limit, QUERY_MAX_RESULT_LIMIT_OBJECTS)?;
+        let limit = cap_page_limit(limit);
 
         // NOTE: fetch one more object to check if there is next page
         let mut objects = self
@@ -318,7 +337,7 @@ impl<S> IndexerApiServer for IndexerApi<S>
 where
     S: IndexerStore + Sync + Send + 'static,
 {
-    fn get_owned_objects(
+    async fn get_owned_objects(
         &self,
         address: SuiAddress,
         query: Option<SuiObjectResponseQuery>,
@@ -334,17 +353,17 @@ where
                 .indexer_metrics()
                 .get_owned_objects_latency
                 .start_timer();
-            let owned_obj_resp = block_on(
-                self.fullnode
-                    .get_owned_objects(address, query, cursor, limit),
-            );
+            let owned_obj_resp = self
+                .fullnode
+                .get_owned_objects(address, query, cursor, limit)
+                .await;
             owned_obj_guard.stop_and_record();
             return owned_obj_resp;
         }
-        block_on(self.get_owned_objects_internal(address, query, cursor, limit))
+        self.get_owned_objects_internal(address, query, cursor, limit)
+            .await
     }
-
-    fn query_transaction_blocks(
+    async fn query_transaction_blocks(
         &self,
         query: SuiTransactionBlockResponseQuery,
         cursor: Option<TransactionDigest>,
@@ -360,24 +379,19 @@ where
                 .indexer_metrics()
                 .query_transaction_blocks_latency
                 .start_timer();
-            let query_tx_resp = block_on(self.fullnode.query_transaction_blocks(
-                query,
-                cursor,
-                limit,
-                descending_order,
-            ));
+            let query_tx_resp = self
+                .fullnode
+                .query_transaction_blocks(query, cursor, limit, descending_order)
+                .await;
             query_tx_guard.stop_and_record();
             return query_tx_resp;
         }
-        Ok(block_on(self.query_transaction_blocks_internal(
-            query,
-            cursor,
-            limit,
-            descending_order,
-        ))?)
+        Ok(self
+            .query_transaction_blocks_internal(query, cursor, limit, descending_order)
+            .await?)
     }
 
-    fn query_events(
+    async fn query_events(
         &self,
         query: EventFilter,
         // exclusive cursor if `Some`, otherwise start from the beginning
@@ -391,23 +405,19 @@ where
                 .indexer_metrics()
                 .query_events_latency
                 .start_timer();
-            let query_events_resp =
-                block_on(
-                    self.fullnode
-                        .query_events(query, cursor, limit, descending_order),
-                );
+            let query_events_resp = self
+                .fullnode
+                .query_events(query, cursor, limit, descending_order)
+                .await;
             query_events_guard.stop_and_record();
             return query_events_resp;
         }
-        Ok(block_on(self.query_events_internal(
-            query,
-            cursor,
-            limit,
-            descending_order,
-        ))?)
+        Ok(self
+            .query_events_internal(query, cursor, limit, descending_order)
+            .await?)
     }
 
-    fn get_dynamic_fields(
+    async fn get_dynamic_fields(
         &self,
         parent_object_id: ObjectID,
         cursor: Option<ObjectID>,
@@ -418,15 +428,15 @@ where
             .indexer_metrics()
             .get_dynamic_fields_latency
             .start_timer();
-        let df_resp = block_on(
-            self.fullnode
-                .get_dynamic_fields(parent_object_id, cursor, limit),
-        );
+        let df_resp = self
+            .fullnode
+            .get_dynamic_fields(parent_object_id, cursor, limit)
+            .await;
         df_guard.stop_and_record();
         df_resp
     }
 
-    fn get_dynamic_field_object(
+    async fn get_dynamic_field_object(
         &self,
         parent_object_id: ObjectID,
         name: DynamicFieldName,
@@ -436,32 +446,44 @@ where
             .indexer_metrics()
             .get_dynamic_field_object_latency
             .start_timer();
-        let df_obj_resp = block_on(
-            self.fullnode
-                .get_dynamic_field_object(parent_object_id, name),
-        );
+        let df_obj_resp = self
+            .fullnode
+            .get_dynamic_field_object(parent_object_id, name)
+            .await;
         df_obj_guard.stop_and_record();
         df_obj_resp
     }
 
     fn subscribe_event(&self, sink: SubscriptionSink, filter: EventFilter) -> SubscriptionResult {
-        spawn_subscription(sink, self.event_handler.subscribe(filter));
+        spawn_subscription(sink, self.subscription_handler.subscribe_events(filter));
         Ok(())
     }
 
-    async fn resolve_name_service_address(&self, _name: String) -> RpcResult<SuiAddress> {
-        // TODO(gegaowp): implement name service resolver in indexer
-        todo!()
+    fn subscribe_transaction(
+        &self,
+        sink: SubscriptionSink,
+        filter: TransactionFilter,
+    ) -> SubscriptionResult {
+        spawn_subscription(
+            sink,
+            self.subscription_handler.subscribe_transactions(filter),
+        );
+        Ok(())
+    }
+
+    async fn resolve_name_service_address(&self, name: String) -> RpcResult<Option<SuiAddress>> {
+        self.fullnode.resolve_name_service_address(name).await
     }
 
     async fn resolve_name_service_names(
         &self,
-        _address: SuiAddress,
-        _cursor: Option<ObjectID>,
-        _limit: Option<usize>,
+        address: SuiAddress,
+        cursor: Option<ObjectID>,
+        limit: Option<usize>,
     ) -> RpcResult<Page<String, ObjectID>> {
-        // TODO(gegaowp): implement name service resolver in indexer
-        todo!()
+        self.fullnode
+            .resolve_name_service_names(address, cursor, limit)
+            .await
     }
 }
 
