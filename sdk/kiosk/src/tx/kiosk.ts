@@ -4,11 +4,19 @@
 import { TransactionBlock, TransactionArgument } from '@mysten/sui.js/transactions';
 
 import { getTypeWithoutPackageAddress, objArg } from '../utils';
-import { confirmRequest, resolveKioskLockRule, resolveRoyaltyRule } from './transfer-policy';
 import {
+	confirmRequest,
+	resolveFloorPriceRule,
+	resolveKioskLockRule,
+	resolvePersonalKioskRule,
+	resolveRoyaltyRule,
+} from './transfer-policy';
+import {
+	FLOOR_PRICE_RULE,
 	KIOSK_LOCK_RULE,
 	KIOSK_MODULE,
 	KIOSK_TYPE,
+	PERSONAL_KIOSK_RULE,
 	ObjectArgument,
 	PurchaseAndResolvePoliciesResponse,
 	PurchaseOptionalParams,
@@ -333,6 +341,7 @@ export function purchaseAndResolvePolicies(
 	for (let rule of policy.rules) {
 		const ruleWithoutAddr = getTypeWithoutPackageAddress(rule);
 
+		console.log(ruleWithoutAddr);
 		switch (ruleWithoutAddr) {
 			case ROYALTY_RULE:
 				resolveRoyaltyRule(tx, itemType, price, policy.id, transferRequest, environment);
@@ -353,6 +362,12 @@ export function purchaseAndResolvePolicies(
 					transferRequest,
 					environment,
 				);
+				break;
+			case PERSONAL_KIOSK_RULE:
+				resolvePersonalKioskRule(tx, itemType, policy.id, transferRequest, environment);
+				break;
+			case FLOOR_PRICE_RULE:
+				resolveFloorPriceRule(tx, itemType, policy.id, transferRequest, environment);
 				break;
 			default:
 				break;

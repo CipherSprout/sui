@@ -18,6 +18,12 @@ export const KIOSK_LOCK_RULE = 'kiosk_lock_rule::Rule';
 /** The Royalty rule */
 export const ROYALTY_RULE = 'royalty_rule::Rule';
 
+/** The Personal Kiosk Rule */
+export const PERSONAL_KIOSK_RULE = 'personal_kiosk_rule::Rule';
+
+/** The Floor Price Rule */
+export const FLOOR_PRICE_RULE = 'floor_price_rule::Rule';
+
 /** The `TransferPolicy` object */
 export type TransferPolicy = {
 	id: string;

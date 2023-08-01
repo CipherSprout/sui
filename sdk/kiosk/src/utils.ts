@@ -7,17 +7,7 @@ import { TransactionBlock, TransactionArgument } from '@mysten/sui.js/transactio
 import { type DynamicFieldInfo } from '@mysten/sui.js/client';
 import { bcs } from './bcs';
 import { KIOSK_TYPE, Kiosk, KioskData, KioskListing, RulesEnvironmentParam } from './types';
-import { MAINNET_RULES_PACKAGE_ADDRESS, TESTNET_RULES_PACKAGE_ADDRESS } from './constants';
 import { SuiClient, PaginationArguments } from '@mysten/sui.js/client';
-
-/* A simple map to the rule package addresses */
-// TODO: Supply the mainnet and devnet addresses.
-export const rulesPackageAddresses = {
-	mainnet: MAINNET_RULES_PACKAGE_ADDRESS,
-	testnet: TESTNET_RULES_PACKAGE_ADDRESS,
-	devnet: '',
-	custom: null,
-};
 
 /**
  * Convert any valid input into a TransactionArgument.
@@ -161,14 +151,19 @@ export function attachLockedItems(kioskData: KioskData, lockedItemIds: string[])
 /**
  * A helper to get a rule's environment address.
  */
-export function getRulePackageAddress(environment: RulesEnvironmentParam): string {
-	// if we have custom environment, we return it.
+export function getRulePackageAddress(environment: RulesEnvironmentParam, version: number): string {
+	// if we have custom environment, we return v1 no matter which version is requested by the FN.
+	// Right now we assume a single version.
 	if (environment.env === 'custom') {
-		if (!environment.address)
-			throw new Error('Please supply the custom package address for rules.');
-		return environment.address;
+		if (!environment.address.v1)
+			throw new Error('Please supply the custom package address for your rules.');
+		return environment.address.v1;
 	}
-	return rulesPackageAddresses[environment.env];
+
+	if (!environment.address || !(`v${version}` in environment.address))
+		throw new Error(`This rule is not available for [${environment.env}].`);
+
+	return environment.address[`v${version}`];
 }
 
 /**

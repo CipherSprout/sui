@@ -110,7 +110,7 @@ export function resolveRoyaltyRule(
 	const policyObj = objArg(tx, policyId);
 	// calculates the amount
 	const [amount] = tx.moveCall({
-		target: `${getRulePackageAddress(environment)}::royalty_rule::fee_amount`,
+		target: `${getRulePackageAddress(environment, 1)}::royalty_rule::fee_amount`,
 		typeArguments: [itemType],
 		arguments: [policyObj, objArg(tx, price)],
 	});
@@ -120,7 +120,7 @@ export function resolveRoyaltyRule(
 
 	// pays the policy
 	tx.moveCall({
-		target: `${getRulePackageAddress(environment)}::royalty_rule::pay`,
+		target: `${getRulePackageAddress(environment, 1)}::royalty_rule::pay`,
 		typeArguments: [itemType],
 		arguments: [policyObj, transferRequest, feeCoin],
 	});
@@ -146,8 +146,48 @@ export function resolveKioskLockRule(
 
 	// proves that the item is locked in the kiosk to the TP.
 	tx.moveCall({
-		target: `${getRulePackageAddress(environment)}::kiosk_lock_rule::prove`,
+		target: `${getRulePackageAddress(environment, 1)}::kiosk_lock_rule::prove`,
 		typeArguments: [itemType],
 		arguments: [transferRequest, objArg(tx, kiosk)],
+	});
+}
+
+/**
+ * Verifies that the Personal Kiosk Rule can be proven.
+ */
+export function resolvePersonalKioskRule(
+	tx: TransactionBlock,
+	itemType: string,
+	policyId: ObjectArgument,
+	transferRequest: TransactionArgument,
+	environment: RulesEnvironmentParam,
+) {
+	const policyObj = objArg(tx, policyId);
+
+	// pays the policy
+	tx.moveCall({
+		target: `${getRulePackageAddress(environment, 2)}::personal_kiosk_rule::prove`,
+		typeArguments: [itemType],
+		arguments: [policyObj, transferRequest],
+	});
+}
+
+/**
+ * Verifies that the Personal Kiosk Rule can be proven.
+ */
+export function resolveFloorPriceRule(
+	tx: TransactionBlock,
+	itemType: string,
+	policyId: ObjectArgument,
+	transferRequest: TransactionArgument,
+	environment: RulesEnvironmentParam,
+) {
+	const policyObj = objArg(tx, policyId);
+
+	// adds floor price rule `prove` function call to the transaction.
+	tx.moveCall({
+		target: `${getRulePackageAddress(environment, 2)}::floor_price_rule::prove`,
+		typeArguments: [itemType],
+		arguments: [policyObj, transferRequest],
 	});
 }

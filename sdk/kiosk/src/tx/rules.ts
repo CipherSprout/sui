@@ -28,7 +28,7 @@ export function attachRoyaltyRule(
 		throw new Error('Invalid basis point percentage. Use a value between [0,10000].');
 
 	tx.moveCall({
-		target: `${getRulePackageAddress(environment)}::royalty_rule::add`,
+		target: `${getRulePackageAddress(environment, 1)}::royalty_rule::add`,
 		typeArguments: [type],
 		arguments: [
 			objArg(tx, policy),
@@ -51,8 +51,46 @@ export function attachKioskLockRule(
 	environment: RulesEnvironmentParam,
 ) {
 	tx.moveCall({
-		target: `${getRulePackageAddress(environment)}::kiosk_lock_rule::add`,
+		target: `${getRulePackageAddress(environment, 1)}::kiosk_lock_rule::add`,
 		typeArguments: [type],
 		arguments: [objArg(tx, policy), objArg(tx, policyCap)],
+	});
+}
+
+/**
+ * Adds the Personal Kiosk Rule to the Transfer Policy.
+ * This Rule forces the sale to happen using a `personal` kiosk, now allowing the transferrable one.
+ */
+export function attachPersonalKioskRule(
+	tx: TransactionBlock,
+	type: string,
+	policy: ObjectArgument,
+	policyCap: ObjectArgument,
+	environment: RulesEnvironmentParam,
+) {
+	tx.moveCall({
+		target: `${getRulePackageAddress(environment, 2)}::personal_kiosk_rule::add`,
+		typeArguments: [type],
+		arguments: [objArg(tx, policy), objArg(tx, policyCap)],
+	});
+}
+
+/**
+ * Adds the Floor Price Kiosk Rule to the Transfer Policy.
+ * This Rule forces a minimum price on each transaction
+ * @param floorPrice Minimum amount in MIST.
+ */
+export function attachFloorPriceRule(
+	tx: TransactionBlock,
+	type: string,
+	policy: ObjectArgument,
+	policyCap: ObjectArgument,
+	floorPrice: number | string,
+	environment: RulesEnvironmentParam,
+) {
+	tx.moveCall({
+		target: `${getRulePackageAddress(environment, 2)}::floor_price_rule::add`,
+		typeArguments: [type],
+		arguments: [objArg(tx, policy), objArg(tx, policyCap), tx.pure(floorPrice, 'u64')],
 	});
 }
