@@ -12564,6 +12564,7 @@ dependencies = [
  "mysten-metrics",
  "parking_lot 0.12.1",
  "prometheus",
+ "rand 0.8.5",
  "rocksdb",
  "scopeguard",
  "serde",
