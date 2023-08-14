@@ -56,16 +56,34 @@ function App() {
 			</div>
 			<div>
 				<button
-					onClick={async () => {
-						console.log(
-							await signMessage({
-								message: new TextEncoder().encode('Message to sign'),
-							}),
-						);
-					}}
-				>
-					Sign message
-				</button>
+			        	onClick={async () => {
+			        		if (currentAccount) {
+			        			let message = new TextEncoder().encode("hello world");
+			        			signMessage({ message: message })
+			        				.then(async (res: SignedMessage) => {
+			        					const signature = fromSerializedSignature(res.signature);
+			        					let pubKey = new Ed25519PublicKey(signature.pubKey.data);
+									console.log(
+										"address from signature: ",
+										pubKey.toSuiAddress()
+									);
+								})
+								.catch((e: Error) => {
+								  console.log("user rejected signing message");
+								});
+								}
+							console.log(
+						    		"Verify Signed Message:",
+						        	await verifyMessage(
+							        	new TextEncoder().encode("hello world"),
+							        	res.signature,
+							        	3
+						        	)
+          );
+			        }}
+			        >
+			          Sign message
+			        </button>
 			</div>
 			<hr />
 			<div>
