@@ -6,7 +6,7 @@ use crate::crypto::DefaultHash;
 use crate::error::{SuiError, SuiResult};
 use crate::id::UID;
 use crate::object::Object;
-use crate::storage::ObjectStore;
+use crate::storage::ObjectAndChildObjectStore;
 use crate::sui_serde::Readable;
 use crate::sui_serde::SuiTypeTag;
 use crate::{MoveTypeTagTrait, ObjectID, SequenceNumber, SUI_FRAMEWORK_ADDRESS};
@@ -281,28 +281,33 @@ where
 /// function that returns the Move type tag.
 /// Note that this function returns the Field object itself, not the value in the field.
 pub fn get_dynamic_field_object_from_store<K>(
-    object_store: &dyn ObjectStore,
+    object_store: &dyn ObjectAndChildObjectStore,
+    root_version: SequenceNumber,
     parent_id: ObjectID,
     key: &K,
 ) -> Result<Object, SuiError>
 where
     K: MoveTypeTagTrait + Serialize + DeserializeOwned + fmt::Debug,
 {
-    let id = derive_dynamic_field_id(parent_id, &K::get_type_tag(), &bcs::to_bytes(key).unwrap())
-        .map_err(|err| SuiError::DynamicFieldReadError(err.to_string()))?;
-    let object = object_store.get_object(&id)?.ok_or_else(|| {
-        SuiError::DynamicFieldReadError(format!(
-            "Dynamic field with key={:?} and ID={:?} not found on parent {:?}",
-            key, id, parent_id
-        ))
-    })?;
+    let child_id =
+        derive_dynamic_field_id(parent_id, &K::get_type_tag(), &bcs::to_bytes(key).unwrap())
+            .map_err(|err| SuiError::DynamicFieldReadError(err.to_string()))?;
+    let object = object_store
+        .read_child_object(&parent_id, &child_id, root_version)?
+        .ok_or_else(|| {
+            SuiError::DynamicFieldReadError(format!(
+                "Dynamic field with key={:?} and ID={:?} not found on parent {:?}",
+                key, child_id, parent_id
+            ))
+        })?;
     Ok(object)
 }
 
 /// Similar to `get_dynamic_field_object_from_store`, but returns the value in the field instead of
 /// the Field object itself.
 pub fn get_dynamic_field_from_store<K, V>(
-    object_store: &dyn ObjectStore,
+    object_store: &dyn ObjectAndChildObjectStore,
+    root_version: SequenceNumber,
     parent_id: ObjectID,
     key: &K,
 ) -> Result<V, SuiError>
@@ -310,7 +315,7 @@ where
     K: MoveTypeTagTrait + Serialize + DeserializeOwned + fmt::Debug,
     V: Serialize + DeserializeOwned,
 {
-    let object = get_dynamic_field_object_from_store(object_store, parent_id, key)?;
+    let object = get_dynamic_field_object_from_store(object_store, root_version, parent_id, key)?;
     let move_object = object.data.try_as_move().ok_or_else(|| {
         SuiError::DynamicFieldReadError(format!(
             "Dynamic field {:?} is not a Move object",

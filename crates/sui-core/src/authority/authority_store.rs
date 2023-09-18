@@ -21,7 +21,6 @@ use sui_types::digests::TransactionEventsDigest;
 use sui_types::error::UserInputError;
 use sui_types::message_envelope::Message;
 use sui_types::messages_checkpoint::ECMHLiveObjectSetDigest;
-use sui_types::object::Owner;
 use sui_types::storage::{
     get_module_by_id, BackingPackageStore, ChildObjectResolver, ObjectKey, ObjectStore,
 };
@@ -1621,6 +1620,12 @@ impl AuthorityStore {
     // Instead of this function use AuthorityEpochStore::epoch_start_configuration() to access this object everywhere
     // besides when we are reading fields for the current epoch
     pub fn get_sui_system_state_object(&self) -> SuiResult<SuiSystemState> {
+        Ok(get_sui_system_state(self.perpetual_tables.as_ref())?.1)
+    }
+
+    pub fn get_sui_system_state_object_with_root_object_version(
+        &self,
+    ) -> SuiResult<(SequenceNumber, SuiSystemState)> {
         get_sui_system_state(self.perpetual_tables.as_ref())
     }
 
@@ -1868,21 +1873,8 @@ impl ChildObjectResolver for AuthorityStore {
         child: &ObjectID,
         child_version_upper_bound: SequenceNumber,
     ) -> SuiResult<Option<Object>> {
-        let Some(child_object) =
-            self.find_object_lt_or_eq_version(*child, child_version_upper_bound)
-        else {
-            return Ok(None)
-        };
-
-        let parent = *parent;
-        if child_object.owner != Owner::ObjectOwner(parent.into()) {
-            return Err(SuiError::InvalidChildObjectAccess {
-                object: *child,
-                given_parent: parent,
-                actual_owner: child_object.owner,
-            });
-        }
-        Ok(Some(child_object))
+        self.perpetual_tables
+            .read_child_object(parent, child, child_version_upper_bound)
     }
 }
 

@@ -9,7 +9,7 @@ use crate::base_types::SequenceNumber;
 use crate::dynamic_field::get_dynamic_field_from_store;
 use crate::error::{SuiError, SuiResult};
 use crate::object::Owner;
-use crate::storage::ObjectStore;
+use crate::storage::{ObjectAndChildObjectStore, ObjectStore};
 use crate::{id::UID, SUI_AUTHENTICATOR_STATE_OBJECT_ID, SUI_FRAMEWORK_ADDRESS};
 
 pub const AUTHENTICATOR_STATE_MODULE_NAME: &IdentStr = ident_str!("authenticator_state");
@@ -105,12 +105,13 @@ impl std::cmp::Ord for ActiveJwk {
 }
 
 pub fn get_authenticator_state(
-    object_store: &dyn ObjectStore,
+    object_store: &dyn ObjectAndChildObjectStore,
 ) -> SuiResult<Option<AuthenticatorStateInner>> {
     let outer = object_store.get_object(&SUI_AUTHENTICATOR_STATE_OBJECT_ID)?;
     let Some(outer) = outer else {
         return Ok(None);
     };
+    let root_object_version = outer.version();
     let move_object = outer.data.try_as_move().ok_or_else(|| {
         SuiError::SuiSystemStateReadError(
             "AuthenticatorState object must be a Move object".to_owned(),
@@ -124,12 +125,13 @@ pub fn get_authenticator_state(
 
     let id = outer.id.id.bytes;
     let inner: AuthenticatorStateInner =
-        get_dynamic_field_from_store(object_store, id, &outer.version).map_err(|err| {
-            SuiError::DynamicFieldReadError(format!(
+        get_dynamic_field_from_store(object_store, root_object_version, id, &outer.version)
+            .map_err(|err| {
+                SuiError::DynamicFieldReadError(format!(
                 "Failed to load sui system state inner object with ID {:?} and version {:?}: {:?}",
                 id, outer.version, err
             ))
-        })?;
+            })?;
 
     Ok(Some(inner))
 }

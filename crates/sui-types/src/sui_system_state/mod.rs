@@ -1,14 +1,14 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::base_types::ObjectID;
+use crate::base_types::{ObjectID, SequenceNumber};
 use crate::committee::CommitteeWithNetworkMetadata;
 use crate::dynamic_field::{
     get_dynamic_field_from_store, get_dynamic_field_object_from_store, Field,
 };
 use crate::error::SuiError;
 use crate::object::{MoveObject, Object};
-use crate::storage::ObjectStore;
+use crate::storage::ObjectAndChildObjectStore;
 use crate::sui_system_state::epoch_start_sui_system_state::EpochStartSystemState;
 use crate::sui_system_state::sui_system_state_inner_v2::SuiSystemStateInnerV2;
 use crate::versioned::Versioned;
@@ -76,12 +76,18 @@ impl SuiSystemStateWrapper {
     pub fn advance_epoch_safe_mode(
         &self,
         params: &AdvanceEpochParams,
-        object_store: &dyn ObjectStore,
+        object_store: &dyn ObjectAndChildObjectStore,
         protocol_config: &ProtocolConfig,
+        root_object_version: SequenceNumber,
     ) -> Object {
         let id = self.id.id.bytes;
-        let mut field_object = get_dynamic_field_object_from_store(object_store, id, &self.version)
-            .expect("Dynamic field object of wrapper should always be present in the object store");
+        let mut field_object = get_dynamic_field_object_from_store(
+            object_store,
+            root_object_version,
+            id,
+            &self.version,
+        )
+        .expect("Dynamic field object of wrapper should always be present in the object store");
         let move_object = field_object
             .data
             .try_as_move_mut()
@@ -171,9 +177,10 @@ pub trait SuiSystemStateTrait {
     fn safe_mode(&self) -> bool;
     fn advance_epoch_safe_mode(&mut self, params: &AdvanceEpochParams);
     fn get_current_epoch_committee(&self) -> CommitteeWithNetworkMetadata;
-    fn get_pending_active_validators<S: ObjectStore>(
+    fn get_pending_active_validators<S: ObjectAndChildObjectStore>(
         &self,
         object_store: &S,
+        root_object_version: SequenceNumber,
     ) -> Result<Vec<SuiValidatorSummary>, SuiError>;
     fn into_epoch_start_state(self) -> EpochStartSystemState;
     fn into_sui_system_state_summary(self) -> SuiSystemStateSummary;
@@ -218,8 +225,8 @@ impl SuiSystemState {
 }
 
 pub fn get_sui_system_state_wrapper(
-    object_store: &dyn ObjectStore,
-) -> Result<SuiSystemStateWrapper, SuiError> {
+    object_store: &dyn ObjectAndChildObjectStore,
+) -> Result<(SequenceNumber, SuiSystemStateWrapper), SuiError> {
     let wrapper = object_store
         .get_object(&SUI_SYSTEM_STATE_OBJECT_ID)?
         // Don't panic here on None because object_store is a generic store.
@@ -233,16 +240,18 @@ pub fn get_sui_system_state_wrapper(
     })?;
     let result = bcs::from_bytes::<SuiSystemStateWrapper>(move_object.contents())
         .map_err(|err| SuiError::SuiSystemStateReadError(err.to_string()))?;
-    Ok(result)
+    Ok((wrapper.version(), result))
 }
 
-pub fn get_sui_system_state(object_store: &dyn ObjectStore) -> Result<SuiSystemState, SuiError> {
-    let wrapper = get_sui_system_state_wrapper(object_store)?;
+pub fn get_sui_system_state(
+    object_store: &dyn ObjectAndChildObjectStore,
+) -> Result<(SequenceNumber, SuiSystemState), SuiError> {
+    let (root_object_version, wrapper) = get_sui_system_state_wrapper(object_store)?;
     let id = wrapper.id.id.bytes;
-    match wrapper.version {
+    let state = match wrapper.version {
         1 => {
             let result: SuiSystemStateInnerV1 =
-                get_dynamic_field_from_store(object_store, id, &wrapper.version).map_err(
+                get_dynamic_field_from_store(object_store, root_object_version, id, &wrapper.version).map_err(
                     |err| {
                         SuiError::DynamicFieldReadError(format!(
                             "Failed to load sui system state inner object with ID {:?} and version {:?}: {:?}",
@@ -254,7 +263,7 @@ pub fn get_sui_system_state(object_store: &dyn ObjectStore) -> Result<SuiSystemS
         }
         2 => {
             let result: SuiSystemStateInnerV2 =
-                get_dynamic_field_from_store(object_store, id, &wrapper.version).map_err(
+                get_dynamic_field_from_store(object_store, root_object_version, id, &wrapper.version).map_err(
                     |err| {
                         SuiError::DynamicFieldReadError(format!(
                             "Failed to load sui system state inner object with ID {:?} and version {:?}: {:?}",
@@ -267,7 +276,7 @@ pub fn get_sui_system_state(object_store: &dyn ObjectStore) -> Result<SuiSystemS
         #[cfg(msim)]
         SUI_SYSTEM_STATE_SIM_TEST_V1 => {
             let result: SimTestSuiSystemStateInnerV1 =
-                get_dynamic_field_from_store(object_store, id, &wrapper.version).map_err(
+                get_dynamic_field_from_store(object_store, root_object_version, id, &wrapper.version).map_err(
                     |err| {
                         SuiError::DynamicFieldReadError(format!(
                             "Failed to load sui system state inner object with ID {:?} and version {:?}: {:?}",
@@ -280,7 +289,7 @@ pub fn get_sui_system_state(object_store: &dyn ObjectStore) -> Result<SuiSystemS
         #[cfg(msim)]
         SUI_SYSTEM_STATE_SIM_TEST_SHALLOW_V2 => {
             let result: SimTestSuiSystemStateInnerShallowV2 =
-                get_dynamic_field_from_store(object_store, id, &wrapper.version).map_err(
+                get_dynamic_field_from_store(object_store, root_object_version, id, &wrapper.version).map_err(
                     |err| {
                         SuiError::DynamicFieldReadError(format!(
                             "Failed to load sui system state inner object with ID {:?} and version {:?}: {:?}",
@@ -293,7 +302,7 @@ pub fn get_sui_system_state(object_store: &dyn ObjectStore) -> Result<SuiSystemS
         #[cfg(msim)]
         SUI_SYSTEM_STATE_SIM_TEST_DEEP_V2 => {
             let result: SimTestSuiSystemStateInnerDeepV2 =
-                get_dynamic_field_from_store(object_store, id, &wrapper.version).map_err(
+                get_dynamic_field_from_store(object_store,root_object_version,  id, &wrapper.version).map_err(
                     |err| {
                         SuiError::DynamicFieldReadError(format!(
                             "Failed to load sui system state inner object with ID {:?} and version {:?}: {:?}",
@@ -307,7 +316,8 @@ pub fn get_sui_system_state(object_store: &dyn ObjectStore) -> Result<SuiSystemS
             "Unsupported SuiSystemState version: {}",
             wrapper.version
         ))),
-    }
+    }?;
+    Ok((root_object_version, state))
 }
 
 /// Given a system state type version, and the ID of the table, along with a key, retrieve the
@@ -316,56 +326,71 @@ pub fn get_sui_system_state(object_store: &dyn ObjectStore) -> Result<SuiSystemS
 /// ValidatorWrapper type.
 pub fn get_validator_from_table<S, K>(
     object_store: &S,
+    root_object_version: SequenceNumber,
     table_id: ObjectID,
     key: &K,
 ) -> Result<SuiValidatorSummary, SuiError>
 where
-    S: ObjectStore,
+    S: ObjectAndChildObjectStore,
     K: MoveTypeTagTrait + Serialize + DeserializeOwned + fmt::Debug,
 {
-    let field: ValidatorWrapper = get_dynamic_field_from_store(object_store, table_id, key)
-        .map_err(|err| {
-            SuiError::SuiSystemStateReadError(format!(
-                "Failed to load validator wrapper from table: {:?}",
-                err
-            ))
-        })?;
+    let field: ValidatorWrapper =
+        get_dynamic_field_from_store(object_store, root_object_version, table_id, key).map_err(
+            |err| {
+                SuiError::SuiSystemStateReadError(format!(
+                    "Failed to load validator wrapper from table: {:?}",
+                    err
+                ))
+            },
+        )?;
     let versioned = field.inner;
     let version = versioned.version;
     match version {
         1 => {
-            let validator: ValidatorV1 =
-                get_dynamic_field_from_store(object_store, versioned.id.id.bytes, &version)
-                    .map_err(|err| {
-                        SuiError::SuiSystemStateReadError(format!(
-                            "Failed to load inner validator from the wrapper: {:?}",
-                            err
-                        ))
-                    })?;
+            let validator: ValidatorV1 = get_dynamic_field_from_store(
+                object_store,
+                root_object_version,
+                versioned.id.id.bytes,
+                &version,
+            )
+            .map_err(|err| {
+                SuiError::SuiSystemStateReadError(format!(
+                    "Failed to load inner validator from the wrapper: {:?}",
+                    err
+                ))
+            })?;
             Ok(validator.into_sui_validator_summary())
         }
         #[cfg(msim)]
         SUI_SYSTEM_STATE_SIM_TEST_V1 => {
-            let validator: SimTestValidatorV1 =
-                get_dynamic_field_from_store(object_store, versioned.id.id.bytes, &version)
-                    .map_err(|err| {
-                        SuiError::SuiSystemStateReadError(format!(
-                            "Failed to load inner validator from the wrapper: {:?}",
-                            err
-                        ))
-                    })?;
+            let validator: SimTestValidatorV1 = get_dynamic_field_from_store(
+                object_store,
+                root_object_version,
+                versioned.id.id.bytes,
+                &version,
+            )
+            .map_err(|err| {
+                SuiError::SuiSystemStateReadError(format!(
+                    "Failed to load inner validator from the wrapper: {:?}",
+                    err
+                ))
+            })?;
             Ok(validator.into_sui_validator_summary())
         }
         #[cfg(msim)]
         SUI_SYSTEM_STATE_SIM_TEST_DEEP_V2 => {
-            let validator: SimTestValidatorDeepV2 =
-                get_dynamic_field_from_store(object_store, versioned.id.id.bytes, &version)
-                    .map_err(|err| {
-                        SuiError::SuiSystemStateReadError(format!(
-                            "Failed to load inner validator from the wrapper: {:?}",
-                            err
-                        ))
-                    })?;
+            let validator: SimTestValidatorDeepV2 = get_dynamic_field_from_store(
+                object_store,
+                root_object_version,
+                versioned.id.id.bytes,
+                &version,
+            )
+            .map_err(|err| {
+                SuiError::SuiSystemStateReadError(format!(
+                    "Failed to load inner validator from the wrapper: {:?}",
+                    err
+                ))
+            })?;
             Ok(validator.into_sui_validator_summary())
         }
         _ => Err(SuiError::SuiSystemStateReadError(format!(
@@ -377,22 +402,25 @@ where
 
 pub fn get_validators_from_table_vec<S, ValidatorType>(
     object_store: &S,
+    root_object_version: SequenceNumber,
     table_id: ObjectID,
     table_size: u64,
 ) -> Result<Vec<ValidatorType>, SuiError>
 where
-    S: ObjectStore,
+    S: ObjectAndChildObjectStore,
     ValidatorType: Serialize + DeserializeOwned,
 {
     let mut validators = vec![];
     for i in 0..table_size {
-        let validator: ValidatorType = get_dynamic_field_from_store(object_store, table_id, &i)
-            .map_err(|err| {
-                SuiError::SuiSystemStateReadError(format!(
-                    "Failed to load validator from table: {:?}",
-                    err
-                ))
-            })?;
+        let validator: ValidatorType =
+            get_dynamic_field_from_store(object_store, root_object_version, table_id, &i).map_err(
+                |err| {
+                    SuiError::SuiSystemStateReadError(format!(
+                        "Failed to load validator from table: {:?}",
+                        err
+                    ))
+                },
+            )?;
         validators.push(validator);
     }
     Ok(validators)
