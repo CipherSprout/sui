@@ -2052,7 +2052,6 @@ impl AuthenticatedMessage for SenderSignedData {
         Ok(())
     }
 }
-
 impl<S> Envelope<SenderSignedData, S> {
     pub fn sender_address(&self) -> SuiAddress {
         self.data().intent_message().value.sender()

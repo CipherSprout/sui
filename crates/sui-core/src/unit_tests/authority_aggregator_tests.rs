@@ -263,6 +263,7 @@ async fn execute_transaction_with_fault_configs(
         &key1,
         addr2,
         rgp,
+        (),
     );
     let Ok(cert) = authorities.process_transaction(tx).await else {
         return false;

@@ -11,11 +11,13 @@ use fastcrypto::traits::KeyPair;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::ident_str;
 use prometheus::Registry;
-use shared_crypto::intent::{Intent, IntentScope};
+use shared_crypto::intent::{Intent, IntentMessage, IntentScope};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use fastcrypto_zkp::bn254::utils::get_zk_login_address;
+use fastcrypto_zkp::bn254::zk_login::ZkLoginInputs;
 use sui_config::genesis::Genesis;
 use sui_config::local_ip_utils;
 use sui_framework::BuiltInFramework;
@@ -23,10 +25,7 @@ use sui_genesis_builder::validator_info::ValidatorInfo;
 use sui_move_build::{BuildConfig, CompiledPackage, SuiPackageHooks};
 use sui_protocol_config::ProtocolConfig;
 use sui_types::base_types::{random_object_ref, ObjectID};
-use sui_types::crypto::{
-    generate_proof_of_possession, get_key_pair, AccountKeyPair, AuthorityPublicKeyBytes,
-    NetworkKeyPair, SuiKeyPair,
-};
+use sui_types::crypto::{generate_proof_of_possession, get_key_pair, AccountKeyPair, AuthorityPublicKeyBytes, NetworkKeyPair, SuiKeyPair, Signature};
 use sui_types::crypto::{AuthorityKeyPair, Signer};
 use sui_types::effects::{SignedTransactionEffects, TransactionEffects};
 use sui_types::error::SuiError;
@@ -46,6 +45,8 @@ use sui_types::{
 };
 use tokio::time::timeout;
 use tracing::{info, warn};
+use sui_types::signature::GenericSignature;
+use sui_types::zk_login_authenticator::ZkLoginAuthenticator;
 
 const WAIT_FOR_TX_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -349,6 +350,7 @@ pub fn make_transfer_object_transaction(
     keypair: &AccountKeyPair,
     recipient: SuiAddress,
     gas_price: u64,
+    zk_login_inputs: &ZkLoginInputs,
 ) -> Transaction {
     let data = TransactionData::new_transfer(
         recipient,
@@ -358,7 +360,19 @@ pub fn make_transfer_object_transaction(
         gas_price * TEST_ONLY_GAS_UNIT_FOR_TRANSFER * 10,
         gas_price,
     );
-    to_sender_signed_transaction(data, keypair)
+
+    let signature = Signature::new_secure(
+        &IntentMessage::new(Intent::sui_transaction(), &data),
+        keypair,
+    );
+
+    let sig = GenericSignature::from(ZkLoginAuthenticator::new(
+        zk_login_inputs.clone(),
+        10u64,
+        signature,
+    ));
+
+    Transaction::from_generic_sig_data(data, Intent::sui_transaction(), vec![sig])
 }
 
 pub fn make_transfer_object_move_transaction(
@@ -375,7 +389,6 @@ pub fn make_transfer_object_move_transaction(
         CallArg::Object(ObjectArg::ImmOrOwnedObject(object_ref)),
         CallArg::Pure(bcs::to_bytes(&AccountAddress::from(dest)).unwrap()),
     ];
-
     to_sender_signed_transaction(
         TransactionData::new_move_call(
             src,
