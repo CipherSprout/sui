@@ -120,45 +120,96 @@ where
         "checkpoint-handler"
     }
 
-    async fn process_checkpoint(&mut self, checkpoint_data: &CheckpointData) -> anyhow::Result<()> {
-        let checkpoint_seq = checkpoint_data.checkpoint_summary.sequence_number();
-        info!(checkpoint_seq, "Checkpoint received by CheckpointHandler");
+    async fn process_checkpoints(&mut self, checkpoints: &[CheckpointData]) -> anyhow::Result<()> {
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+        // Safe to unwrap, checked emptiness above
+        let first_checkpoint_seq = checkpoints
+            .first()
+            .unwrap()
+            .checkpoint_summary
+            .sequence_number();
+        let last_checkpoint_seq = checkpoints
+            .last()
+            .unwrap()
+            .checkpoint_summary
+            .sequence_number();
+        info!(
+            first_checkpoint_seq,
+            last_checkpoint_seq, "Checkpoints received by CheckpointHandler"
+        );
 
         // Index checkpoint data
-        let index_timer = self.metrics.checkpoint_index_latency.start_timer();
-        let checkpoint = Self::index_checkpoint_and_epoch(
-            &self.state,
-            checkpoint_data.clone(),
+        let indexing_timer = self.metrics.checkpoint_index_latency.start_timer();
+        let packages = Self::index_packages(checkpoints, &self.metrics);
+        let module_resolver = Arc::new(InterimModuleResolver::new(
+            self.state.module_cache(),
             self.package_cache.clone(),
-            &self.metrics,
-        )
-        .await
-        .tap_err(|e| {
-            error!(
-                checkpoint_seq,
-                "Failed to index checkpoints with error: {}",
-                e.to_string()
-            );
-        })?;
-        let elapsed = index_timer.stop_and_record();
+            &packages,
+            self.metrics.clone(),
+        ));
+        let mut packages_per_checkpoint: HashMap<_, Vec<_>> = HashMap::new();
+        for package in packages {
+            packages_per_checkpoint
+                .entry(package.checkpoint_sequence_number)
+                .or_default()
+                .push(package);
+        }
+        let mut tasks = vec![];
+        let state_clone = Arc::new(self.state.clone());
+        let metrics_clone = self.metrics.clone();
+        for checkpoint in checkpoints {
+            let packages = packages_per_checkpoint
+                .remove(checkpoint.checkpoint_summary.sequence_number())
+                .unwrap_or_default();
+            tasks.push(tokio::task::spawn(Self::index_one_checkpoint(
+                state_clone.clone(),
+                checkpoint.clone(),
+                metrics_clone.clone(),
+                packages,
+                module_resolver.clone(),
+            )));
+        }
+        let checkpoint_data_to_commit = futures::future::join_all(tasks)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .tap_err(|e| {
+                error!(
+                    "Failed to join all checkpoint indexing tasks with error: {}",
+                    e.to_string()
+                );
+            })?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .tap_err(|e| {
+                error!("Failed to index checkpoints with error: {}", e.to_string());
+            })?;
+        let elapsed = indexing_timer.stop_and_record();
 
         info!(
-            checkpoint_seq,
-            elapsed, "Checkpoint indexing finished, about to sending to commit handler"
+            first_checkpoint_seq,
+            last_checkpoint_seq,
+            elapsed,
+            "Checkpoints indexing finished, about to sending to commit handler"
         );
+
         // NOTE: when the channel is full, checkpoint_sender_guard will wait until the channel has space.
         // Checkpoints are sent sequentially to stick to the order of checkpoint sequence numbers.
-        self.indexed_checkpoint_sender
-            .send(checkpoint)
-            .await
-            .tap_ok(|_| info!(checkpoint_seq, "Checkpoint sent to commit handler"))
-            .unwrap_or_else(|e| {
-                panic!(
-                    "checkpoint channel send should not fail, but got error: {:?}",
-                    e
-                )
-            });
-
+        for checkpoint_data in checkpoint_data_to_commit {
+            let checkpoint_seq = checkpoint_data.checkpoint.sequence_number;
+            self.indexed_checkpoint_sender
+                .send(checkpoint_data)
+                .await
+                .tap_ok(|_| info!(checkpoint_seq, "Checkpoint sent to commit handler"))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "checkpoint channel send should not fail, but got error: {:?}",
+                        e
+                    )
+                });
+        }
         Ok(())
     }
 }
@@ -168,7 +219,7 @@ where
     S: IndexerStoreV2 + Clone + Sync + Send + 'static,
 {
     async fn index_epoch(
-        state: &S,
+        state: &Arc<S>,
         data: &CheckpointData,
     ) -> Result<Option<EpochToCommit>, IndexerError> {
         let checkpoint_object_store = EpochEndIndexingObjectStore::new(data);
@@ -233,12 +284,22 @@ where
         }))
     }
 
-    async fn index_checkpoint_and_epoch(
-        state: &S,
+    async fn index_one_checkpoint(
+        state: Arc<S>,
         data: CheckpointData,
-        package_cache: Arc<Mutex<IndexingPackageCache>>,
-        metrics: &IndexerMetrics,
+        metrics: IndexerMetrics,
+        packages: Vec<IndexedPackage>,
+        module_resolver: Arc<impl GetModule>,
     ) -> Result<CheckpointDataToCommit, IndexerError> {
+        let checkpoint_seq = data.checkpoint_summary.sequence_number;
+        info!(checkpoint_seq, "Indexing checkpoint data blob");
+
+        // Index Objects
+        let object_changes =
+            Self::index_objects(&state, data.clone(), &packages, &metrics, &module_resolver);
+
+        let epoch = Self::index_epoch(&state, &data).await?;
+
         let (checkpoint, db_transactions, db_events, db_indices) = {
             let CheckpointData {
                 transactions,
@@ -299,6 +360,7 @@ where
                         tx_digest,
                         event,
                         checkpoint_summary.timestamp_ms,
+                        &module_resolver,
                     )
                 }));
 
@@ -396,12 +458,6 @@ where
             )
         };
 
-        let epoch = Self::index_epoch(state, &data).await?;
-
-        // Index Objects
-        let (object_changes, packages) =
-            Self::index_checkpoint(state, data, package_cache, metrics);
-
         Ok(CheckpointDataToCommit {
             checkpoint,
             transactions: db_transactions,
@@ -413,37 +469,15 @@ where
         })
     }
 
-    fn index_checkpoint(
-        state: &S,
-        data: CheckpointData,
-        package_cache: Arc<Mutex<IndexingPackageCache>>,
-        metrics: &IndexerMetrics,
-    ) -> (TransactionObjectChangesToCommit, Vec<IndexedPackage>) {
-        let checkpoint_seq = data.checkpoint_summary.sequence_number;
-        info!(checkpoint_seq, "Indexing checkpoint");
-        let packages = Self::index_packages(&data, metrics);
-
-        let object_changes = Self::index_objects(state, data, &packages, package_cache, metrics);
-
-        (object_changes, packages)
-    }
-
     fn index_objects(
-        state: &S,
+        state: &Arc<S>,
         data: CheckpointData,
         packages: &[IndexedPackage],
-        package_cache: Arc<Mutex<IndexingPackageCache>>,
         metrics: &IndexerMetrics,
+        module_resolver: &impl GetModule,
     ) -> TransactionObjectChangesToCommit {
         let _timer = metrics.indexing_objects_latency.start_timer();
         let checkpoint_seq = data.checkpoint_summary.sequence_number;
-        let module_resolver = InterimModuleResolver::new(
-            state.module_cache(),
-            package_cache,
-            packages,
-            checkpoint_seq,
-            metrics.clone(),
-        );
         let deleted_objects = data
             .transactions
             .iter()
@@ -484,7 +518,7 @@ where
                         });
                         assert_eq!(oref.1, object.version());
                         let df_info =
-                            try_create_dynamic_field_info(object, &objects, &module_resolver)
+                            try_create_dynamic_field_info(object, &objects, module_resolver)
                                 .unwrap_or_else(|e| {
                                     panic!(
                                 "failed to create dynamic field info for obj: {:?}:{:?}. Err: {e}",
@@ -497,6 +531,7 @@ where
                             checkpoint_seq,
                             object.clone(),
                             df_info,
+                            module_resolver,
                         ))
                     })
                     .collect::<Vec<_>>()
@@ -509,22 +544,28 @@ where
     }
 
     fn index_packages(
-        checkpoint_data: &CheckpointData,
+        checkpoint_data: &[CheckpointData],
         metrics: &IndexerMetrics,
     ) -> Vec<IndexedPackage> {
         let _timer = metrics.indexing_packages_latency.start_timer();
         checkpoint_data
-            .output_objects()
             .iter()
-            .filter_map(|o| {
-                if let sui_types::object::Data::Package(p) = &o.data {
-                    Some(IndexedPackage {
-                        package_id: o.id(),
-                        move_package: p.clone(),
+            .flat_map(|data| {
+                let checkpoint_sequence_number = data.checkpoint_summary.sequence_number;
+                data.output_objects()
+                    .iter()
+                    .filter_map(|o| {
+                        if let sui_types::object::Data::Package(p) = &o.data {
+                            Some(IndexedPackage {
+                                package_id: o.id(),
+                                move_package: p.clone(),
+                                checkpoint_sequence_number,
+                            })
+                        } else {
+                            None
+                        }
                     })
-                } else {
-                    None
-                }
+                    .collect::<Vec<_>>()
             })
             .collect()
     }

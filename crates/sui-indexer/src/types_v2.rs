@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::errors::IndexerError;
+use move_bytecode_utils::module_cache::GetModule;
 use move_core_types::language_storage::StructTag;
+use move_core_types::value::MoveStruct;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use serde_with::serde_as;
-use sui_json_rpc_types::ObjectChange;
+use sui_json_rpc_types::{ObjectChange, SuiMoveStruct};
 use sui_types::base_types::{ObjectDigest, SequenceNumber};
 use sui_types::base_types::{ObjectID, SuiAddress};
 use sui_types::crypto::AggregateAuthoritySignature;
@@ -17,7 +20,9 @@ use sui_types::messages_checkpoint::{
     CertifiedCheckpointSummary, CheckpointCommitment, CheckpointDigest, EndOfEpochData,
 };
 use sui_types::move_package::MovePackage;
+use sui_types::object::{MoveObject, ObjectFormatOptions};
 use sui_types::object::{Object, Owner};
+use sui_types::parse_sui_struct_tag;
 use sui_types::sui_serde::SuiStructTag;
 use sui_types::sui_system_state::sui_system_state_summary::{
     SuiSystemStateSummary, SuiValidatorSummary,
@@ -173,6 +178,7 @@ pub struct IndexedEvent {
     pub package: ObjectID,
     pub module: String,
     pub event_type: String,
+    pub event_json: String,
     pub bcs: Vec<u8>,
     pub timestamp_ms: u64,
 }
@@ -185,7 +191,39 @@ impl IndexedEvent {
         transaction_digest: TransactionDigest,
         event: &sui_types::event::Event,
         timestamp_ms: u64,
+        module_resolver: &impl GetModule,
     ) -> Self {
+        let event_json = {
+            let type_ = parse_sui_struct_tag(&event.type_.to_string()).unwrap_or_else(|e|
+                panic!(
+                    "Failed to parse event struct tag: {:?}. checkpoint_seq: {checkpoint_sequence_number}, tx_seq: {tx_sequence_number}, event_seq: {event_sequence_number}. Err: {e}", event.type_, 
+                )
+            );
+            let struct_tag_string = type_.to_string();
+            if struct_tag_string.contains("NewGameEvent8192")
+                || struct_tag_string.contains("GameMoveEvent8192")
+            {
+                Value::Null
+            } else {
+                let layout = MoveObject::get_layout_from_struct_tag(
+                    type_.clone(),
+                    ObjectFormatOptions::default(),
+                    module_resolver,
+                ).unwrap_or_else(|e|
+                    panic!(
+                        "Failed to get move struct layout for event struct tag: {:?}. checkpoint_seq: {checkpoint_sequence_number}, tx_seq: {tx_sequence_number}, event_seq: {event_sequence_number}. Err: {e}", type_, 
+                    )
+                );
+                let move_object = MoveStruct::simple_deserialize(&event.contents, &layout)
+                    .map_err(|e| IndexerError::SerdeError(e.to_string())
+                ).unwrap_or_else(|e|
+                panic!(
+                    "Failed to simple_deserialize event. checkpoint_seq: {checkpoint_sequence_number}, tx_seq: {tx_sequence_number}, event_seq: {event_sequence_number}. Err: {e}",
+                ));
+                SuiMoveStruct::from(move_object).to_json_value()
+            }
+        };
+
         Self {
             tx_sequence_number,
             event_sequence_number,
@@ -195,6 +233,7 @@ impl IndexedEvent {
             package: event.package_id,
             module: event.transaction_module.to_string(),
             event_type: event.type_.to_string(),
+            event_json: event_json.to_string(),
             bcs: event.contents.clone(),
             timestamp_ms,
         }
@@ -237,6 +276,10 @@ pub struct IndexedObject {
     pub coin_type: Option<String>,
     pub coin_balance: Option<u64>,
     pub df_info: Option<DynamicFieldInfo>,
+    // json of MoveObject
+    pub object_json: Option<String>,
+    // struct tag of MoveObject
+    pub struct_tag: Option<String>,
 }
 
 impl IndexedObject {
@@ -244,7 +287,43 @@ impl IndexedObject {
         checkpoint_sequence_number: u64,
         object: Object,
         df_info: Option<DynamicFieldInfo>,
+        module_resolver: &impl GetModule,
     ) -> Self {
+        let (object_json, struct_tag) = if let Some(struct_tag) = object.data.struct_tag() {
+            let struct_tag_string = struct_tag.to_string();
+            // if struct_tag_string.contains("game_8192::Game8192")
+            //     || struct_tag_string.contains("game_8192::GameMove8192")
+            // Before fully synced, skip object json
+            if true {
+                (None, Some(struct_tag_string))
+            } else {
+                let move_object = object.data.try_as_move().unwrap();
+                let layout = MoveObject::get_layout_from_struct_tag(
+                    struct_tag.clone(),
+                    ObjectFormatOptions::default(),
+                    module_resolver,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to get layout for object {} from struct tag: {:?}. Err: {e}",
+                        object.id(),
+                        struct_tag
+                    )
+                });
+                let move_object = MoveStruct::simple_deserialize(move_object.contents(), &layout)
+                    .map_err(|e| IndexerError::SerdeError(e.to_string()))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Failed to do simple_deserialize for object {}. Err: {e}",
+                            object.id()
+                        )
+                    });
+                let parsed_json = SuiMoveStruct::from(move_object).to_json_value();
+                (Some(parsed_json.to_string()), Some(struct_tag_string))
+            }
+        } else {
+            (None, None)
+        };
         let (owner_type, owner_id) = owner_to_owner_info(&object.owner);
         let coin_type = object.coin_type_maybe().map(|t| t.to_string());
         let coin_balance = if coin_type.is_some() {
@@ -261,6 +340,8 @@ impl IndexedObject {
             owner_type,
             owner_id,
             object,
+            struct_tag,
+            object_json,
             coin_type,
             coin_balance,
             df_info,
@@ -272,6 +353,8 @@ impl IndexedObject {
 pub struct IndexedPackage {
     pub package_id: ObjectID,
     pub move_package: MovePackage,
+    // The checkpoint where this package is published.
+    pub checkpoint_sequence_number: u64,
 }
 
 #[derive(Debug, Clone)]
