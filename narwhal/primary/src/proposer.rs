@@ -8,6 +8,7 @@ use fastcrypto::hash::Hash as _;
 use mysten_metrics::metered_channel::{Receiver, Sender};
 use mysten_metrics::spawn_logged_monitored_task;
 use std::collections::{BTreeMap, VecDeque};
+use std::ops::Sub;
 use std::{cmp::Ordering, sync::Arc};
 use storage::ProposerStore;
 use tokio::time::{sleep_until, Instant};
@@ -38,6 +39,8 @@ pub struct OurDigestMessage {
 pub mod proposer_tests;
 
 const DEFAULT_HEADER_RESEND_TIMEOUT: Duration = Duration::from_secs(60);
+const TIMEOUT_DRIFT_LOWER_THRESHOLD: Duration = Duration::from_millis(200);
+const TIMEOUT_DRIFT_UPPER_THRESHOLD: Duration = Duration::from_millis(100);
 
 /// The proposer creates new headers and send them to the core for broadcasting and further processing.
 pub struct Proposer {
@@ -75,7 +78,7 @@ pub struct Proposer {
     /// The current round of the dag.
     round: Round,
     /// Last time the round has been updated
-    last_round_timestamp: Option<TimestampMs>,
+    last_round_timestamp: Option<(Round, TimestampMs)>,
     /// Signals a new narwhal round
     tx_narwhal_round_updates: watch::Sender<Round>,
     /// Holds the certificates' ids waiting to be included in the next header.
@@ -334,22 +337,14 @@ impl Proposer {
         // the next leader.
         let next_round = self.round + 1;
         if self.committee.size() > 1
-            && next_round % 2 == 0
-            && self.leader_schedule.leader(next_round).id() == self.authority_id
+            && ((next_round % 2 == 0
+                && self.leader_schedule.leader(next_round).id() == self.authority_id)
+                || (next_round % 2 != 0
+                    && self.committee.leader(next_round).id() == self.authority_id))
         {
             return Duration::ZERO;
         }
 
-        // Give a boost on the odd rounds to a node by using the whole committee here, not just the
-        // nodes of the leader_schedule. By doing this we keep the proposal rate as high as possible
-        // which leads to higher round rate and also acting as a score booster to the less strong nodes
-        // as well.
-        if self.committee.size() > 1
-            && next_round % 2 != 0
-            && self.committee.leader(next_round).id() == self.authority_id
-        {
-            return Duration::ZERO;
-        }
         self.min_header_delay
     }
 
@@ -469,7 +464,8 @@ impl Proposer {
 
                 // Update the metrics
                 self.metrics.current_round.set(self.round as i64);
-                let current_timestamp = now();
+                debug!("Dag moved to round {}", self.round);
+
                 let reason = if max_delay_timed_out {
                     "max_timeout"
                 } else if enough_digests {
@@ -477,14 +473,6 @@ impl Proposer {
                 } else {
                     "min_timeout"
                 };
-                if let Some(t) = &self.last_round_timestamp {
-                    self.metrics
-                        .proposal_latency
-                        .with_label_values(&[reason])
-                        .observe(Duration::from_millis(current_timestamp - t).as_secs_f64());
-                }
-                self.last_round_timestamp = Some(current_timestamp);
-                debug!("Dag moved to round {}", self.round);
 
                 // Make a new header.
                 match self.make_header().await {
@@ -507,12 +495,22 @@ impl Proposer {
 
                 // Reschedule the timer.
                 let timer_start = Instant::now();
+                let current_timestamp = now();
                 max_delay_timer
                     .as_mut()
                     .reset(timer_start + self.max_delay());
                 min_delay_timer
                     .as_mut()
                     .reset(timer_start + self.min_delay());
+
+                // Update metrics and timestamps
+                if let Some((_round, t)) = &self.last_round_timestamp {
+                    self.metrics
+                        .proposal_latency
+                        .with_label_values(&[reason])
+                        .observe(Duration::from_millis(current_timestamp - t).as_secs_f64());
+                }
+                self.last_round_timestamp = Some((self.round, current_timestamp));
 
                 // Recheck condition and reset time out flags.
                 continue;
@@ -646,9 +644,12 @@ impl Proposer {
                             max_delay_timer
                                 .as_mut()
                                 .reset(timer_start + self.max_delay());
-                            min_delay_timer
+
+                            if let Some(d) = self.reset_min_delay_timeout(&self.last_parents, min_delay_timer.deadline()) {
+                                min_delay_timer
                                 .as_mut()
-                                .reset(timer_start);
+                                .reset(d);
+                            }
                         },
                         Ordering::Less => {
                             debug!("Proposer ignoring older parents, round={} parent.round={}", self.round, round);
@@ -658,15 +659,12 @@ impl Proposer {
                         Ordering::Equal => {
                             // The core gives us the parents the first time they are enough to form a quorum.
                             // Then it keeps giving us all the extra parents.
-                            self.last_parents.extend(parents);
+                            self.last_parents.extend(parents.clone());
 
-                            // As the schedule can change after an odd round proposal - when the new schedule algorithm is
-                            // enabled - make sure that the timer is reset correctly for the round leader. No harm doing
-                            // this here as well.
-                            if self.min_delay() == Duration::ZERO {
+                            if let Some(d) = self.reset_min_delay_timeout(&parents, min_delay_timer.deadline()) {
                                 min_delay_timer
                                 .as_mut()
-                                .reset(Instant::now());
+                                .reset(d);
                             }
                         }
                     }
@@ -732,5 +730,87 @@ impl Proposer {
                 .num_of_pending_batches_in_proposer
                 .set(self.digests.len() as i64);
         }
+    }
+
+    fn reset_min_delay_timeout(
+        &self,
+        parents: &[Certificate],
+        min_delay_timer_deadline: Instant,
+    ) -> Option<Instant> {
+        // As the schedule can change after an odd round proposal - when the new schedule algorithm is
+        // enabled - make sure that the timer is reset correctly for the round leader. No harm doing
+        // this here as well.
+        if self.min_delay() == Duration::ZERO {
+            return Some(Instant::now());
+        }
+
+        // If this validator is not boosted either on an even or odd round, then we try to make sure
+        // that its timer is still aligned compared to the rest of the chain.
+        // Try to correct the proposal timeout based on the last proposed round's avg proposed header time.
+        // If we detect that our remaining timeout value is greater than the calculated proposal remaining time,
+        // then we reset to the one calculated from the proposal to align with the others.
+        let last_round_start_ts: TimestampMs = Self::calculate_round_start_median(parents);
+        let remaining_until_timeout: Duration = min_delay_timer_deadline.sub(Instant::now());
+
+        let remaining_until_time_based_on_network = self.min_header_delay.saturating_sub(
+            Duration::from_millis(now().saturating_sub(last_round_start_ts)),
+        );
+
+        // We add some threshold so we don't always calibrate based on the network timeout, but only
+        // if this node has somehow drifted a lot.
+        if ((remaining_until_time_based_on_network + TIMEOUT_DRIFT_UPPER_THRESHOLD)
+            < remaining_until_timeout)
+            || (remaining_until_timeout
+                < (remaining_until_time_based_on_network
+                    .saturating_sub(TIMEOUT_DRIFT_LOWER_THRESHOLD)))
+        {
+            debug!("Resetting min_delay to {remaining_until_time_based_on_network:?} vs {remaining_until_timeout:?}");
+
+            let direction = if (remaining_until_time_based_on_network
+                + TIMEOUT_DRIFT_UPPER_THRESHOLD)
+                < remaining_until_timeout
+            {
+                "set_lower"
+            } else {
+                "set_higher"
+            };
+
+            self.metrics
+                .proposal_reset_min_delay
+                .with_label_values(&[direction])
+                .observe(remaining_until_time_based_on_network.as_secs_f64());
+
+            return Some(Instant::now() + remaining_until_time_based_on_network);
+        }
+        None
+    }
+
+    #[allow(dead_code)]
+    fn calculate_round_start_median(round_certificates: &[Certificate]) -> TimestampMs {
+        let mut start_timestamps: Vec<TimestampMs> = round_certificates
+            .iter()
+            .map(|c| *c.header().created_at())
+            .collect();
+
+        start_timestamps.sort();
+
+        let len = start_timestamps.len();
+        if len % 2 == 1 {
+            start_timestamps[len / 2]
+        } else {
+            // Even number of elements, median is the average of the middle two values
+            let middle_left = start_timestamps[len / 2 - 1];
+            let middle_right = start_timestamps[len / 2];
+            (middle_left + middle_right) / 2
+        }
+    }
+
+    #[allow(dead_code)]
+    fn calculate_round_start_avg(round_certificates: &[Certificate]) -> TimestampMs {
+        round_certificates
+            .iter()
+            .map(|c| *c.header().created_at())
+            .sum::<TimestampMs>()
+            / round_certificates.len() as u64
     }
 }
