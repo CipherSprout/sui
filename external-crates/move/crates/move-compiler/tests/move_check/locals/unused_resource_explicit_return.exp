@@ -9,6 +9,14 @@ error[E05001]: ability constraint not satisfied
   │             │    
   │             Cannot ignore values without the 'drop' ability. The value must be used
 
+warning[W01013]: unneeded 'return'
+  ┌─ tests/move_check/locals/unused_resource_explicit_return.move:6:9
+  │
+6 │         return ()
+  │         ^^^^^^^^^ Remove this 'return'
+  │
+  = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+
 error[E06001]: unused value without 'drop'
    ┌─ tests/move_check/locals/unused_resource_explicit_return.move:11:21
    │
@@ -59,6 +67,14 @@ error[E05001]: ability constraint not satisfied
    │             │    
    │             Cannot ignore values without the 'drop' ability. The value must be used
 
+warning[W01013]: unneeded 'return'
+   ┌─ tests/move_check/locals/unused_resource_explicit_return.move:34:9
+   │
+34 │         return ()
+   │         ^^^^^^^^^ Remove this 'return'
+   │
+   = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+
 error[E06001]: unused value without 'drop'
    ┌─ tests/move_check/locals/unused_resource_explicit_return.move:34:9
    │
@@ -72,6 +88,14 @@ error[E06001]: unused value without 'drop'
    │                  The type '0x8675309::M::R' does not have the ability 'drop'
 34 │         return ()
    │         ^^^^^^^^^ Invalid return
+
+warning[W01013]: unneeded 'return'
+   ┌─ tests/move_check/locals/unused_resource_explicit_return.move:38:9
+   │
+38 │         return ()
+   │         ^^^^^^^^^ Remove this 'return'
+   │
+   = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
 
 error[E06001]: unused value without 'drop'
    ┌─ tests/move_check/locals/unused_resource_explicit_return.move:38:9

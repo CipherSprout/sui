@@ -10,6 +10,7 @@ module 0x42::M {
         0
     }
 
+    #[allow(unneeded_return)]
     fun t2(s: &S): &u64 {
         if (true) return & s.f else & s.f
     }

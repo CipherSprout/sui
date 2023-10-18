@@ -1,0 +1,40 @@
+warning[W01013]: unneeded 'return'
+  ┌─ tests/move_check/control_flow/unneeded_return.move:4:9
+  │
+4 │         return 5
+  │         ^^^^^^^^ Remove this 'return'
+  │
+  = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+
+warning[W01013]: unneeded 'return'
+  ┌─ tests/move_check/control_flow/unneeded_return.move:8:21
+  │
+8 │         if (cond) { return 5 } else { abort 0 }
+  │                     ^^^^^^^^ Remove this 'return'
+  │
+  = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+
+warning[W09005]: dead or unreachable code
+  ┌─ tests/move_check/control_flow/unneeded_return.move:8:39
+  │
+8 │         if (cond) { return 5 } else { abort 0 }
+  │                                       ^^^^^^^ Unreachable code. This statement (and any following statements) will not be executed.
+  │
+  = This warning can be suppressed with '#[allow(dead_code)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+
+warning[W01013]: unneeded 'return'
+   ┌─ tests/move_check/control_flow/unneeded_return.move:12:21
+   │
+12 │         if (cond) { return 5 } else { return 0 }
+   │                     ^^^^^^^^ Remove this 'return'
+   │
+   = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+
+warning[W01013]: unneeded 'return'
+   ┌─ tests/move_check/control_flow/unneeded_return.move:12:39
+   │
+12 │         if (cond) { return 5 } else { return 0 }
+   │                                       ^^^^^^^^ Remove this 'return'
+   │
+   = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+

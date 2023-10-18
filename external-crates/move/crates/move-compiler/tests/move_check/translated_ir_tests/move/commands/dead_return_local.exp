@@ -6,3 +6,11 @@ warning[W09005]: dead or unreachable code
   │
   = This warning can be suppressed with '#[allow(dead_code)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
 
+warning[W01013]: unneeded 'return'
+  ┌─ tests/move_check/translated_ir_tests/move/commands/dead_return_local.move:5:5
+  │
+5 │     return ()
+  │     ^^^^^^^^^ Remove this 'return'
+  │
+  = This warning can be suppressed with '#[allow(unneeded_return)]' applied to the 'module' or module member ('const', 'fun', or 'struct')
+
