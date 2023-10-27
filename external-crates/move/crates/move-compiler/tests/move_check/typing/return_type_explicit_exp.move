@@ -1,3 +1,4 @@
+#[allow(unneeded_return)]
 module 0x8675309::M {
     struct R {}
 
