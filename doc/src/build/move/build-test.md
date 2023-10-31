@@ -166,7 +166,7 @@ An instance of the `Scenario` struct contains a per-address object pool emulatin
 Update your `my_module.move` file to include [entry functions](index.md#entry-functions) callable from Sui that implement sword creation and transfer. With these in place, you can then add a multi-transaction test that uses the `test_scenario` module to test these new capabilities. Put these functions after the accessors (Part 5 in comments).
 
 ``` rust
-    public entry fun sword_create(magic: u64, strength: u64, recipient: address, ctx: &mut TxContext) {
+    public entry fun sword_create(forge: &mut Forge, magic: u64, strength: u64, recipient: address, ctx: &mut TxContext) {
         use sui::transfer;
 
         // create a sword
@@ -175,6 +175,7 @@ Update your `my_module.move` file to include [entry functions](index.md#entry-fu
             magic: magic,
             strength: strength,
         };
+        forge.swords_created = forge.swords_created + 1;
         // transfer the sword
         transfer::transfer(sword, recipient);
     }
