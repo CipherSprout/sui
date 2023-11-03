@@ -188,6 +188,8 @@ impl AuthorityStorePruner {
             .flat_map(|content| content.iter().map(|tx| tx.transaction))
             .collect();
 
+        debug!("Pruning transactions {:?}", transactions);
+
         perpetual_batch.delete_batch(&perpetual_db.transactions, transactions.iter())?;
         perpetual_batch.delete_batch(&perpetual_db.executed_effects, transactions.iter())?;
         perpetual_batch.delete_batch(

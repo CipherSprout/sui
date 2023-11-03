@@ -10,7 +10,7 @@ use mysten_metrics::spawn_logged_monitored_task;
 use sui_protocol_config::ProtocolConfig;
 use tap::TapFallible;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use types::{
     Certificate, CertificateAPI, ConditionalBroadcastReceiver, HeaderAPI, Round, SystemMessage,
 };
@@ -118,7 +118,8 @@ impl RandomnessState {
 
     async fn start_dkg(&self, tx_system_messages: &Sender<SystemMessage>) {
         let msg = self.party.create_message(&mut rand::thread_rng());
-        info!("random beacon: sending DKG Message: {msg:?}");
+        info!("random beacon: sending DKG Message");
+        trace!("DKG Message contents: {msg:?}");
         let _ = tx_system_messages
             .send(SystemMessage::DkgMessage(msg))
             .await;

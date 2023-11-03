@@ -3396,8 +3396,14 @@ impl AuthorityState {
     ) -> SuiResult<Option<VerifiedSignedTransactionEffects>> {
         let effects = self.database.get_executed_effects(transaction_digest)?;
         match effects {
-            Some(effects) => Ok(Some(self.sign_effects(effects, epoch_store)?)),
-            None => Ok(None),
+            Some(effects) => {
+                debug!("resign");
+                Ok(Some(self.sign_effects(effects, epoch_store)?))
+            }
+            None => {
+                debug!("no effects found");
+                Ok(None)
+            }
         }
     }
 
