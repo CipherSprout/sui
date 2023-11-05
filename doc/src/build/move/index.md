@@ -137,7 +137,7 @@ that it will do what it is intended to do.
 In general, an entry function must satisfy the following properties:
 
 - Has the `entry` modifier. The visibility does not matter. The function can be `public`, `public(friend)`, or `internal`.
-- Has no return value
+- All return types are non-reference types with `drop`.
 - (Optional) Has a mutable reference to an instance of the `TxContext` struct defined in the [TxContext module](https://github.com/MystenLabs/sui/tree/main/crates/sui-framework/packages/sui-framework/sources/tx_context.move) as the last parameter.
 
 More concretely, the `transfer` function is `public`, has no return value, and has three parameters:
