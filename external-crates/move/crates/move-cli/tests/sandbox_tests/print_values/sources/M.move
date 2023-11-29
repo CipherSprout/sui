@@ -9,8 +9,6 @@ module M {
     use std::debug::print_string;
     use std::string;
     #[test_only]
-    use std::unit_test::create_signers_for_testing;
-    #[test_only]
     use std::vector;
 
     struct Foo has drop {}
@@ -124,11 +122,6 @@ module M {
 
         let a = @0x1234c0ffee;
         print(&a);
-
-        // print a signer
-        let senders = create_signers_for_testing(1);
-        let sender = vector::pop_back(&mut senders);
-        print(&sender);
     }
 
     #[allow(unused_const)]
@@ -185,9 +178,6 @@ module M {
         let v_addr = vector[@0x1234, @0x5678, @0xabcdef];
         print(&v_addr);
 
-        let v_signer = create_signers_for_testing(4);
-        print(&v_signer);
-
         let v = vector[
             TestInner {
                 val: 4u128,
@@ -230,9 +220,6 @@ module M {
 
         let v_addr = vector[vector[@0x1234, @0x5678], vector[@0xabcdef, @0x9999]];
         print(&v_addr);
-
-        let v_signer = vector[create_signers_for_testing(2), create_signers_for_testing(2)];
-        print(&v_signer);
 
         let v = vector[
             vector[

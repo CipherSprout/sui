@@ -13,10 +13,7 @@ use move_core_types::{
     runtime_value::MoveValue,
     vm_status::StatusCode,
 };
-use move_model::{
-    model::{AbilitySet, FunctionEnv, GlobalEnv, TypeParameter},
-    ty as MT,
-};
+use move_model::model::{AbilitySet, FunctionEnv, GlobalEnv, TypeParameter};
 use move_stackless_bytecode::{
     function_target::FunctionTarget, function_target_pipeline::FunctionTargetsHolder,
 };
@@ -132,28 +129,9 @@ fn check_and_convert_type_args_and_args(
         let local_ty = fun_env.get_local_type(i);
         debug_assert_eq!(local_ty, param.1);
 
-        // NOTE: for historical reasons, we may receive `&signer` as arguments
-        // TODO (mengxu): clean this up when we no longer accept `&signer` as valid arguments
-        // for transaction scripts and `public(script)` functions.
-        match local_ty {
-            MT::Type::Reference(false, base_ty)
-                if matches!(*base_ty, MT::Type::Primitive(MT::PrimitiveType::Signer)) =>
-            {
-                match arg {
-                    MoveValue::Address(v) => {
-                        converted_args.push(TypedValue::mk_signer(*v));
-                    }
-                    _ => {
-                        return Err(PartialVMError::new(StatusCode::TYPE_MISMATCH));
-                    }
-                }
-            }
-            _ => {
-                let base_ty = convert_model_base_type(env, &local_ty, &converted_ty_args);
-                let converted = convert_move_value(arg, &base_ty)?;
-                converted_args.push(converted);
-            }
-        }
+        let base_ty = convert_model_base_type(env, &local_ty, &converted_ty_args);
+        let converted = convert_move_value(arg, &base_ty)?;
+        converted_args.push(converted);
     }
 
     Ok((converted_ty_args, converted_args))
@@ -169,7 +147,7 @@ pub fn convert_move_type_tag(env: &GlobalEnv, tag: &TypeTag) -> PartialVMResult<
         TypeTag::U128 => BaseType::mk_u128(),
         TypeTag::U256 => BaseType::mk_u256(),
         TypeTag::Address => BaseType::mk_address(),
-        TypeTag::Signer => BaseType::mk_signer(),
+        TypeTag::Signer => panic!("signer is not supported"),
         TypeTag::Vector(elem_tag) => BaseType::mk_vector(convert_move_type_tag(env, elem_tag)?),
         TypeTag::Struct(struct_tag) => {
             BaseType::mk_struct(convert_move_struct_tag(env, struct_tag)?)
@@ -241,9 +219,6 @@ pub fn convert_move_value(val: &MoveValue, ty: &BaseType) -> PartialVMResult<Typ
         (MoveValue::Address(v), BaseType::Primitive(PrimitiveType::Address)) => {
             TypedValue::mk_address(*v)
         }
-        (MoveValue::Signer(v), BaseType::Primitive(PrimitiveType::Signer)) => {
-            TypedValue::mk_signer(*v)
-        }
         (MoveValue::Vector(v), BaseType::Vector(elem)) => {
             let converted = v
                 .iter()
@@ -298,7 +273,7 @@ fn get_abilities(env: &GlobalEnv, ty: &TypeTag) -> PartialVMResult<AbilitySet> {
         | TypeTag::U128
         | TypeTag::U256
         | TypeTag::Address => Ok(AbilitySet::PRIMITIVES),
-        TypeTag::Signer => Ok(AbilitySet::SIGNER),
+        TypeTag::Signer => panic!("signer is not supported"),
         TypeTag::Vector(elem_ty) => AbilitySet::polymorphic_abilities(
             AbilitySet::VECTOR,
             vec![false],
