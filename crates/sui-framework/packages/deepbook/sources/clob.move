@@ -977,10 +977,11 @@ module deepbook::clob {
             assert!(base_quantity_filled == quantity, EOrderCannotBeFullyFilled);
             return (base_quantity_filled, quote_quantity_filled, false, 0)
         };
+
         if (restriction == POST_OR_ABORT) {
             assert!(base_quantity_filled == 0, EOrderCannotBeFullyPassive);
             order_id = inject_limit_order(pool, price, quantity, is_bid, expire_timestamp, account_cap, ctx);
-            return (base_quantity_filled, quote_quantity_filled, true, order_id)
+            (base_quantity_filled, quote_quantity_filled, true, order_id)
         } else {
             assert!(restriction == NO_RESTRICTION, EInvalidRestriction);
             if (quantity > base_quantity_filled) {
