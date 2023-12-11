@@ -30,7 +30,7 @@ pub mod state_accumulator;
 pub mod storage;
 pub mod streamer;
 pub mod subscription_handler;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, msim, feature = "test-utils"))]
 pub mod test_utils;
 mod transaction_input_loader;
 mod transaction_manager;
