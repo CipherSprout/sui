@@ -6,6 +6,7 @@
 //# init --protocol-version 6 --addresses test=0x0
 
 //# publish
+#[allow(unneeded_return)]
 module test::m {
     public fun t1(cond: bool) {
         let x: vector<u64>;

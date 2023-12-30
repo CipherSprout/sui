@@ -182,6 +182,7 @@ codes!(
         InvalidSpecBlockMember: { msg: "invalid spec block member", severity: NonblockingError },
         InvalidRestrictedIdentifier:
             { msg: "invalid identifier escape", severity: NonblockingError },
+        UnnecessaryReturn: { msg: "unneeded 'return'", severity: Warning },
     ],
     // errors for any rules around declaration items
     Declarations: [

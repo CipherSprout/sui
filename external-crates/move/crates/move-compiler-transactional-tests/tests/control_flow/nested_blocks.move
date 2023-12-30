@@ -10,7 +10,7 @@ module 0x42::m {
                 return 10
             }
         } else {
-            return 20
+            20
         }
     }
 

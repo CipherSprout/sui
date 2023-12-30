@@ -157,6 +157,8 @@ impl<'env> Context<'env> {
 const VALUE_UNREACHABLE_MSG: &str =
     "Expected a value. Any code surrounding or after this expression will not be reached";
 
+const UNNEEDED_RETURN_MSG: &str = "Remove this 'return'";
+
 const UNREACHABLE_MSG: &str = "Any code after this expression will not be reached";
 
 const NOT_EXECUTED_MSG: &str =
@@ -337,7 +339,19 @@ fn tail(context: &mut Context, e: &T::Exp) -> Option<ControlFlow> {
         // -----------------------------------------------------------------------------------------
         //  statements
         // -----------------------------------------------------------------------------------------
-        E::Return(_) | E::Abort(_) | E::Give(_, _) | E::Continue(_) => value(context, e),
+        E::Return(rhs) => {
+            if let Some(error) = value(context, rhs) {
+                context.report_value_error(error);
+                divergent(*eloc)
+            } else {
+                context.env.add_diag(diag!(
+                    Syntax::UnnecessaryReturn,
+                    (*eloc, UNNEEDED_RETURN_MSG)
+                ));
+                return_called(*eloc)
+            }
+        }
+        E::Abort(_) | E::Give(_, _) | E::Continue(_) => value(context, e),
         E::Assign(_, _, _) | E::Mutate(_, _) => None,
 
         // -----------------------------------------------------------------------------------------

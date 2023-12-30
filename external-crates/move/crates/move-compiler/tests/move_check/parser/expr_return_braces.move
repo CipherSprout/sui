@@ -1,4 +1,5 @@
 module 0x8675309::M {
+    #[allow(unneeded_return)]
     fun f(v: u64): u64 {
         // Braces or parenthesis are not required for a control expression
         // inside a "return" expression.
