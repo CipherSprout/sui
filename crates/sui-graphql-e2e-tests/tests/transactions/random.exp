@@ -63,6 +63,10 @@ Response: {
   }
 }
 
+task 4 'set-random-state'. lines 49-50:
+Error: Transaction Effects Status: Move Runtime Abort. Location: sui::random::update_randomness_state (function index 3) at offset 54, Abort Code: 2
+Debug of error: MoveAbort(MoveLocation { module: ModuleId { address: sui, name: Identifier("random") }, function: 3, instruction: 54, function_name: Some("update_randomness_state") }, 2) at command Some(0)
+
 task 5 'create-checkpoint'. lines 52-52:
 Checkpoint created: 3
 
