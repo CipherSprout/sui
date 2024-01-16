@@ -5,10 +5,7 @@ use sui_json_rpc::name_service::Domain;
 
 #[test]
 fn test_name_service_outputs() {
-    assert_eq!(
-        "@test".parse::<Domain>().unwrap().to_string(),
-        "test.sui"
-    );
+    assert_eq!("@test".parse::<Domain>().unwrap().to_string(), "test.sui");
     assert_eq!(
         "test.sui".parse::<Domain>().unwrap().to_string(),
         "test.sui"
@@ -26,10 +23,7 @@ fn test_name_service_outputs() {
         "sui.sui.sui"
     );
 
-    assert_eq!(
-        "@sui".parse::<Domain>().unwrap().to_string(),
-        "sui.sui"
-    );
+    assert_eq!("@sui".parse::<Domain>().unwrap().to_string(), "sui.sui");
 
     assert_eq!(
         "test*test@test".parse::<Domain>().unwrap().to_string(),
@@ -39,15 +33,9 @@ fn test_name_service_outputs() {
 
 #[test]
 fn test_different_wildcard() {
-    assert_eq!(
-        "test.sui".parse::<Domain>(),
-        "test*sui".parse::<Domain>(),
-    );
+    assert_eq!("test.sui".parse::<Domain>(), "test*sui".parse::<Domain>(),);
 
-    assert_eq!(
-        "@test".parse::<Domain>(),
-        "test*sui".parse::<Domain>(),
-    );
+    assert_eq!("@test".parse::<Domain>(), "test*sui".parse::<Domain>(),);
 }
 
 #[test]

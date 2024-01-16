@@ -192,7 +192,7 @@ fn separator(s: &str) -> Result<char, DomainParseError> {
 }
 
 /// Converts @label ending to label{separator}sui ending.
-/// 
+///
 /// E.g. `@example` -> `example.sui` | `test@example` -> `test.example.sui`
 fn convert_from_new_format(s: &str, separator: &char) -> Result<String, DomainParseError> {
     let total_separators = s.chars().filter(|x| x == &SUI_NEW_FORMAT_SEPARATOR).count();
@@ -209,21 +209,16 @@ fn convert_from_new_format(s: &str, separator: &char) -> Result<String, DomainPa
 
     let mut parts: Vec<&str> = s.split(SUI_NEW_FORMAT_SEPARATOR).collect();
 
-    // catch case where we have an input like `test@` instead of `@test`
-    // Also catches the case where input is `@`
+    // Catch case where we have an input like `test@` instead of `@test`
+    // Also catches cases where the last element (remaining name) contains a separator (e.g. test@test.sui)
     // We can access parts[parts.len()-1] because we know there's at least one separator.
-    if parts[parts.len() - 1].is_empty() {
+    let last_part = parts[parts.len() - 1];
+
+    if last_part.is_empty() || last_part.contains(*separator) {
         return Err(DomainParseError::InvalidSeparator);
     }
-
     // remove empty parts (e.g. ["test", "", "example"] -> ["test", "example"])
     parts.retain(|&x| !x.is_empty());
-    
-    // detect case where input is `anything@test<separator>{anything...}` 
-    // e.g. test@test.sui (which is invalid)
-    if parts[parts.len() - 1].contains(*separator) {
-        return Err(DomainParseError::InvalidSeparator);
-    }
 
     parts.push(DEFAULT_TLD);
 
