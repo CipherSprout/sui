@@ -23,6 +23,9 @@ const NAME_SERVICE_DEFAULT_REVERSE_REGISTRY: &str =
     "0x2fd099e17a292d2bc541df474f9fafa595653848cbabb2d7a4656ec786a1969f";
 const _NAME_SERVICE_OBJECT_ADDRESS: &str =
     "0x6e0ddefc0ad98889c04bab9639e512c21766c5e6366f89e696956d9be6952871";
+const DEFAULT_TLD: &str = "sui";
+const ACCEPTED_SEPARATORS: [char; 2] = ['.', '*'];
+const SUI_NEW_FORMAT_SEPARATOR: char = '@';
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Registry {
@@ -128,14 +131,17 @@ pub enum DomainParseError {
     InvalidUnderscore,
     #[error("Domain must contain at least one label")]
     LabelsEmpty,
+    #[error("Domain must include only one separator")]
+    InvalidSeparator,
 }
 
 impl FromStr for Domain {
     type Err = DomainParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        /// The maximum length of a full domain
-        const MAX_DOMAIN_LENGTH: usize = 200;
+        // The maximum length of a full domain.
+        // Leaving 18 characters offset for extra web2 usage.
+        const MAX_DOMAIN_LENGTH: usize = 235;
 
         if s.len() > MAX_DOMAIN_LENGTH {
             return Err(DomainParseError::ExceedsMaxLength(
@@ -144,13 +150,17 @@ impl FromStr for Domain {
             ));
         }
 
-        let labels = s
-            .split('.')
+        let separator = separator(s)?;
+        let formatted_string = convert_from_new_format(s, &separator)?;
+
+        let labels = formatted_string
+            .split(separator)
             .rev()
             .map(validate_label)
             .collect::<Result<Vec<_>, Self::Err>>()?;
 
-        if labels.is_empty() {
+        // A valid domain in our system has at least a TLD and an SLD (len == 2).
+        if labels.len() < 2 {
             return Err(DomainParseError::LabelsEmpty);
         }
 
@@ -158,6 +168,66 @@ impl FromStr for Domain {
 
         Ok(Domain { labels })
     }
+}
+
+/// Parses a separator from the domain string input.
+/// E.g.  `example.sui` -> `.` | example*sui -> `@` | `example*sui` -> `*`
+fn separator(s: &str) -> Result<char, DomainParseError> {
+    let mut domain_separator: Option<char> = None;
+
+    for separator in ACCEPTED_SEPARATORS.iter() {
+        if s.contains(*separator) {
+            if domain_separator.is_some() {
+                return Err(DomainParseError::InvalidSeparator);
+            }
+
+            domain_separator = Some(*separator);
+        }
+    }
+
+    match domain_separator {
+        Some(separator) => Ok(separator),
+        None => Ok(ACCEPTED_SEPARATORS[0]),
+    }
+}
+
+/// Converts @label ending to label{separator}sui ending.
+/// 
+/// E.g. `@example` -> `example.sui` | `test@example` -> `test.example.sui`
+fn convert_from_new_format(s: &str, separator: &char) -> Result<String, DomainParseError> {
+    let total_separators = s.chars().filter(|x| x == &SUI_NEW_FORMAT_SEPARATOR).count();
+
+    // if no `@` is detected, return as is.
+    if total_separators == 0 {
+        return Ok(s.to_string());
+    }
+
+    // multiple `@` supplied, which is wrong.
+    if total_separators > 1 {
+        return Err(DomainParseError::InvalidSeparator);
+    }
+
+    let mut parts: Vec<&str> = s.split(SUI_NEW_FORMAT_SEPARATOR).collect();
+
+    // catch case where we have an input like `test@` instead of `@test`
+    // Also catches the case where input is `@`
+    // We can access parts[parts.len()-1] because we know there's at least one separator.
+    if parts[parts.len() - 1].is_empty() {
+        return Err(DomainParseError::InvalidSeparator);
+    }
+
+    // remove empty parts (e.g. ["test", "", "example"] -> ["test", "example"])
+    parts.retain(|&x| !x.is_empty());
+    
+    // detect case where input is `anything@test<separator>{anything...}` 
+    // e.g. test@test.sui (which is invalid)
+    if parts[parts.len() - 1].contains(*separator) {
+        return Err(DomainParseError::InvalidSeparator);
+    }
+
+    parts.push(DEFAULT_TLD);
+
+    Ok(parts.join(separator.to_string().as_str()).to_string())
 }
 
 fn validate_label(label: &str) -> Result<&str, DomainParseError> {
