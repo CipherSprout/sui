@@ -222,7 +222,7 @@ fn convert_from_new_format(s: &str, separator: &char) -> Result<String, DomainPa
 
     parts.push(DEFAULT_TLD);
 
-    Ok(parts.join(separator.to_string().as_str()).to_string())
+    Ok(parts.join(&separator.to_string()))
 }
 
 fn validate_label(label: &str) -> Result<&str, DomainParseError> {
