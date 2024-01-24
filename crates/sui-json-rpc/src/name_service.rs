@@ -63,6 +63,49 @@ impl Domain {
             type_params: vec![],
         }
     }
+
+    /// Allows formatting a Domain as a string with a custom separator 
+    /// and conditionally using the new format.
+    /// 
+    /// E.g. can format a Domain { labels: ['sui', 'test'] } -> `test.sui` | `@test` | `test*sui`
+    /// 
+    /// If `use_new_format` is on, we're exporting names using the new style.
+    /// The new style omits the TLD, and uses `@` as the last separator (as a direct replacement for `.sui`)
+    /// 
+    /// Examples: test.sui -> @test
+    ///           inner.test.sui -> inner@test
+    ///           test.test.example.sui -> test.test@example
+    /// 
+    pub fn format(&self, separator: &char, use_new_format: bool) -> String {
+        let mut output: String = String::from("");
+        let len = self.labels.len();
+        for (i, label) in self.labels.iter().rev().enumerate() {
+            
+            // We add a separator before the last label if we're using the new format.
+            // For SLD names, we add it before any words (As it acts like a prefix)
+            let add_new_format_separator = use_new_format && (len > 2 && i == len - 2 || len == 2);
+
+            // Our new format uses `@` as the last separator always. 
+            // We also want it to be the first separator
+            if add_new_format_separator {
+                output.push_str(&SUI_NEW_FORMAT_SEPARATOR.to_string());
+            }
+
+            output.push_str(label);
+
+            // If we've reached here, it means we've already added the SLD label and we can omit the TLD.
+            if add_new_format_separator {
+                break;
+            }
+
+            // if we use the new format, we skip the last 2 labels (TLD + SLD)
+            if !(use_new_format && len > 2 && i == len - 3) && i != len - 1 {
+                output.push_str(&separator.to_string());
+            }
+        }
+
+        output
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,14 +302,9 @@ fn validate_label(label: &str) -> Result<&str, DomainParseError> {
 
 impl fmt::Display for Domain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let len = self.labels.len();
-        for (i, label) in self.labels.iter().rev().enumerate() {
-            f.write_str(label)?;
-
-            if i != len - 1 {
-                f.write_str(".")?;
-            }
-        }
+        // We're strictly defining the separator as `.` (not even re-using the separators vector)
+        // to make sure we're always using the correct form for on-chain lookups.
+        f.write_str(&self.format(&'.', false))?;
         Ok(())
     }
 }

@@ -34,7 +34,6 @@ fn test_name_service_outputs() {
 #[test]
 fn test_different_wildcard() {
     assert_eq!("test.sui".parse::<Domain>(), "test*sui".parse::<Domain>(),);
-
     assert_eq!("@test".parse::<Domain>(), "test*sui".parse::<Domain>(),);
 }
 
@@ -49,4 +48,31 @@ fn test_invalid_inputs() {
     assert!("sui".parse::<Domain>().is_err());
     assert!("test.test@example.sui".parse::<Domain>().is_err());
     assert!("test@test@example".parse::<Domain>().is_err());
+}
+
+#[test]
+fn base_format_tests() {
+    let mut domain = "example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', false), "example.sui");
+    domain = "test.example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', false), "test.example.sui");
+    domain = "inner.test.example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', false), "inner.test.example.sui");
+    domain = "more.inner.test.example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', false), "more.inner.test.example.sui");
+}
+
+#[test]
+fn new_format_tests() {
+    let mut domain = "example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', true), "@example");
+
+    domain = "test.example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', true), "test@example");
+
+    domain = "inner.test.example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', true), "inner.test@example");
+
+    domain = "more.inner.test.example.sui".parse::<Domain>().unwrap();
+    assert_eq!(domain.format(&'.', true), "more.inner.test@example");
 }
