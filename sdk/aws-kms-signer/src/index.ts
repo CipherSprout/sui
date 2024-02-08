@@ -19,7 +19,7 @@ import * as asn1ts from 'asn1-ts';
 export class AWSKMSSigner extends Signer {
 	#pk: Secp256k1PublicKey;
 
-	constructor(publicKey: string) {
+	constructor(publicKey: Uint8Array) {
 		super();
 		this.#pk = new Secp256k1PublicKey(publicKey);
 	}
@@ -32,8 +32,12 @@ export class AWSKMSSigner extends Signer {
 		return this.#pk;
 	}
 
-	async setPublicKey(keyId: string) {
+	async setPublicKeyWithAWS(keyId: string) {
 		this.#pk = (await this.getAWSPublicKey(keyId)) || new Secp256k1PublicKey(''); // hack way to deal with undefined return from getAWSPublicKey
+	}
+
+	setPublicKey(publicKey: Uint8Array) {
+		this.#pk = new Secp256k1PublicKey(publicKey);
 	}
 
 	// https://datatracker.ietf.org/doc/html/rfc5480#section-2.2
