@@ -130,7 +130,11 @@ where
             Broadcaster::new(context.clone(), network_client.clone(), &signals_receivers);
 
         let store = Arc::new(RocksDBStore::new(&context.parameters.db_path_str_unsafe()));
-        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
+        let dag_state = Arc::new(RwLock::new(DagState::new(
+            context.clone(),
+            store.clone(),
+            None,
+        )));
 
         let block_verifier = Arc::new(SignedBlockVerifier::new(
             context.clone(),
@@ -145,7 +149,7 @@ where
             commit_consumer.sender,
             commit_consumer.last_processed_index,
             dag_state.clone(),
-            store.clone(),
+            store,
         );
 
         let core = Core::new(
@@ -156,7 +160,6 @@ where
             core_signals,
             protocol_keypair,
             dag_state.clone(),
-            store,
         );
 
         let (core_dispatcher, core_thread_handle) =
@@ -477,7 +480,7 @@ mod tests {
         let core_dispatcher = Arc::new(FakeCoreThreadDispatcher::new());
         let network_client = Arc::new(FakeNetworkClient::default());
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store)));
+        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store, None)));
         let synchronizer = Synchronizer::start(
             network_client,
             context.clone(),

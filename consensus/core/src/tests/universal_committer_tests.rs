@@ -744,6 +744,7 @@ fn basic_test_setup() -> (
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
 
     // Create committer without pipelining and only 1 leader per leader round

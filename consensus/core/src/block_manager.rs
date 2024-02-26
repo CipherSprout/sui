@@ -329,7 +329,11 @@ mod tests {
         let (context, _key_pairs) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
+        let dag_state = Arc::new(RwLock::new(DagState::new(
+            context.clone(),
+            store.clone(),
+            None,
+        )));
 
         let mut block_manager =
             BlockManager::new(context.clone(), dag_state, Arc::new(NoopBlockVerifier));
@@ -373,7 +377,11 @@ mod tests {
         let (context, _key_pairs) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
+        let dag_state = Arc::new(RwLock::new(DagState::new(
+            context.clone(),
+            store.clone(),
+            None,
+        )));
 
         let mut block_manager =
             BlockManager::new(context.clone(), dag_state, Arc::new(NoopBlockVerifier));
@@ -411,7 +419,11 @@ mod tests {
         let (context, _key_pairs) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
+        let dag_state = Arc::new(RwLock::new(DagState::new(
+            context.clone(),
+            store.clone(),
+            None,
+        )));
 
         let mut block_manager =
             BlockManager::new(context.clone(), dag_state, Arc::new(NoopBlockVerifier));
@@ -454,7 +466,11 @@ mod tests {
             all_blocks.shuffle(&mut StdRng::from_seed([seed; 32]));
 
             let store = Arc::new(MemStore::new());
-            let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
+            let dag_state = Arc::new(RwLock::new(DagState::new(
+                context.clone(),
+                store.clone(),
+                None,
+            )));
 
             let mut block_manager =
                 BlockManager::new(context.clone(), dag_state, Arc::new(NoopBlockVerifier));
@@ -552,7 +568,11 @@ mod tests {
 
         // Create BlockManager.
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
+        let dag_state = Arc::new(RwLock::new(DagState::new(
+            context.clone(),
+            store.clone(),
+            None,
+        )));
         let mut block_manager =
             BlockManager::new(context.clone(), dag_state, Arc::new(test_verifier));
 

@@ -6,6 +6,7 @@ use rstest::rstest;
 use tempfile::TempDir;
 
 use super::{mem_store::MemStore, rocksdb_store::RocksDBStore, Store};
+use crate::block::Slot;
 use crate::{
     block::{BlockDigest, BlockRef, TestBlock, VerifiedBlock},
     commit::TrustedCommit,
@@ -99,6 +100,20 @@ async fn read_and_contain_blocks(
         assert!(!contain_blocks[1]);
         assert!(contain_blocks[2]);
     }
+
+    {
+        for block in &written_blocks {
+            let found = store
+                .contains_block_at_slot(block.into())
+                .expect("Read blocks should not fail");
+            assert!(found);
+        }
+
+        let found = store
+            .contains_block_at_slot(Slot::new(10, AuthorityIndex::new_for_test(0)))
+            .expect("Read blocks should not fail");
+        assert!(!found);
+    }
 }
 
 #[rstest]
@@ -167,7 +182,7 @@ async fn scan_blocks(
 
     {
         let scanned_blocks = store
-            .scan_last_blocks_by_author(AuthorityIndex::new_for_test(1), 2)
+            .scan_last_blocks_by_author(AuthorityIndex::new_for_test(1), 2, None)
             .expect("Scan blocks should not fail");
         assert_eq!(scanned_blocks.len(), 2, "{:?}", scanned_blocks);
         assert_eq!(
@@ -176,7 +191,7 @@ async fn scan_blocks(
         );
 
         let scanned_blocks = store
-            .scan_last_blocks_by_author(AuthorityIndex::new_for_test(1), 0)
+            .scan_last_blocks_by_author(AuthorityIndex::new_for_test(1), 0, None)
             .expect("Scan blocks should not fail");
         assert_eq!(scanned_blocks.len(), 0);
     }

@@ -194,7 +194,11 @@ mod test {
         let (context, mut key_pairs) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
+        let dag_state = Arc::new(RwLock::new(DagState::new(
+            context.clone(),
+            store.clone(),
+            None,
+        )));
         let block_manager = BlockManager::new(
             context.clone(),
             dag_state.clone(),
@@ -210,7 +214,7 @@ mod test {
             sender.clone(),
             0, // last_processed_index
             dag_state.clone(),
-            store.clone(),
+            store,
         );
         let core = Core::new(
             context.clone(),
@@ -220,7 +224,6 @@ mod test {
             signals,
             key_pairs.remove(context.own_index.value()).1,
             dag_state,
-            store,
         );
 
         let (core_dispatcher, handle) = ChannelCoreThreadDispatcher::start(core, context);

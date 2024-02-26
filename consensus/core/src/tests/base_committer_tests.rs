@@ -25,6 +25,7 @@ fn try_direct_commit() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 
@@ -81,6 +82,7 @@ fn idempotence() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 
@@ -125,6 +127,7 @@ fn multiple_direct_commit() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 
@@ -166,6 +169,7 @@ fn direct_skip() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 
@@ -218,6 +222,7 @@ fn indirect_commit() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 
@@ -360,6 +365,7 @@ fn indirect_skip() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 
@@ -490,6 +496,7 @@ fn undecided() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 
@@ -578,6 +585,7 @@ fn test_byzantine_direct_commit() {
     let dag_state = Arc::new(RwLock::new(DagState::new(
         context.clone(),
         Arc::new(MemStore::new()),
+        None,
     )));
     let committer = BaseCommitterBuilder::new(context.clone(), dag_state.clone()).build();
 

@@ -27,10 +27,10 @@ use crate::context::Context;
 use crate::error::ConsensusResult;
 use crate::{ensure, error::ConsensusError};
 
+pub(crate) const GENESIS_ROUND: Round = 0;
+
 /// Round number of a block.
 pub type Round = u32;
-
-pub const GENESIS_ROUND: Round = 0;
 
 /// Block proposal timestamp in milliseconds.
 pub type BlockTimestampMs = u64;
@@ -462,6 +462,15 @@ impl VerifiedBlock {
         let mut hasher = DefaultHashFunction::new();
         hasher.update(serialized);
         BlockDigest(hasher.finalize().into())
+    }
+}
+
+impl From<&VerifiedBlock> for Slot {
+    fn from(value: &VerifiedBlock) -> Self {
+        Self {
+            round: value.round(),
+            authority: value.author(),
+        }
     }
 }
 

@@ -237,6 +237,9 @@ impl<C: NetworkClient, V: BlockVerifier, D: CoreThreadDispatcher> Synchronizer<C
                             }
                         }
                     }
+                },
+                else => {
+                    break;
                 }
             }
         }
