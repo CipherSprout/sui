@@ -19,6 +19,7 @@
 -  [Function `size`](#0x2_vec_map_size)
 -  [Function `is_empty`](#0x2_vec_map_is_empty)
 -  [Function `destroy_empty`](#0x2_vec_map_destroy_empty)
+-  [Function `swap`](#0x2_vec_map_swap)
 -  [Function `into_keys_values`](#0x2_vec_map_into_keys_values)
 -  [Function `keys`](#0x2_vec_map_keys)
 -  [Function `get_idx_opt`](#0x2_vec_map_get_idx_opt)
@@ -416,6 +417,30 @@
     <b>let</b> <a href="../../dependencies/sui-framework/vec_map.md#0x2_vec_map_VecMap">VecMap</a> { contents } = self;
     <b>assert</b>!(<a href="../../dependencies/move-stdlib/vector.md#0x1_vector_is_empty">vector::is_empty</a>(&contents), <a href="../../dependencies/sui-framework/vec_map.md#0x2_vec_map_EMapNotEmpty">EMapNotEmpty</a>);
     <a href="../../dependencies/move-stdlib/vector.md#0x1_vector_destroy_empty">vector::destroy_empty</a>(contents)
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x2_vec_map_swap"></a>
+
+## Function `swap`
+
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="../../dependencies/sui-framework/vec_map.md#0x2_vec_map_swap">swap</a>&lt;K: <b>copy</b>, V&gt;(self: &<b>mut</b> <a href="../../dependencies/sui-framework/vec_map.md#0x2_vec_map_VecMap">vec_map::VecMap</a>&lt;K, V&gt;, i: u64, j: u64)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="../../dependencies/sui-framework/vec_map.md#0x2_vec_map_swap">swap</a>&lt;K: <b>copy</b>, V&gt;(self: &<b>mut</b> <a href="../../dependencies/sui-framework/vec_map.md#0x2_vec_map_VecMap">VecMap</a>&lt;K,V&gt;, i: u64, j: u64) {
+    <a href="../../dependencies/move-stdlib/vector.md#0x1_vector_swap">vector::swap</a>(&<b>mut</b> self.contents, i, j);
 }
 </code></pre>
 

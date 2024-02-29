@@ -110,6 +110,12 @@ module sui::vec_map {
         assert!(vector::is_empty(&contents), EMapNotEmpty);
         vector::destroy_empty(contents)
     }
+    
+    /// Swaps the elements at the `i`th and `j`th indices in the VecMap `self`.
+    /// Aborts if `i` or `j` is out of bounds.
+    public fun swap<K: copy, V>(self: &mut VecMap<K,V>, i: u64, j: u64) {
+        vector::swap(&mut self.contents, i, j);
+    }
 
     /// Unpack `self` into vectors of its keys and values.
     /// The output keys and values are stored in insertion order, *not* sorted by key.
