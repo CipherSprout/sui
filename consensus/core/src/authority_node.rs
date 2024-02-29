@@ -12,6 +12,7 @@ use sui_protocol_config::ProtocolConfig;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
+use crate::leader_timeout::DEFAULT_LEADER_TIMEOUT_WEIGHTS;
 use crate::{
     block::{timestamp_utc_ms, BlockAPI, BlockRef, SignedBlock, VerifiedBlock},
     block_manager::BlockManager,
@@ -165,8 +166,12 @@ where
         let (core_dispatcher, core_thread_handle) =
             ChannelCoreThreadDispatcher::start(core, context.clone());
         let core_dispatcher = Arc::new(core_dispatcher);
-        let leader_timeout_handle =
-            LeaderTimeoutTask::start(core_dispatcher.clone(), &signals_receivers, context.clone());
+        let leader_timeout_handle = LeaderTimeoutTask::start(
+            core_dispatcher.clone(),
+            &signals_receivers,
+            context.clone(),
+            DEFAULT_LEADER_TIMEOUT_WEIGHTS,
+        );
 
         let synchronizer = Synchronizer::start(
             network_client,

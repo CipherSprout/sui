@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::block::Round;
 use crate::context::Context;
-use crate::core::CoreSignalsReceivers;
+use crate::core::{CoreSignalsReceivers, NUM_LEADERS_PER_ROUND};
 use crate::core_thread::CoreThreadDispatcher;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +11,19 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep_until, Instant};
 use tracing::{debug, warn};
+
+/// The leader timeout weights used to update the remaining timeout according to each leader weight.
+/// Each position on the array represents the weight of the leader of a round according to their ordered position.
+/// For example, on an array with values [50, 30, 20], it means that:
+/// * the first leader of the round has weight 50
+/// * the second leader of the round has weight 30
+/// * the third leader of the round has weight 20
+///
+/// The weights basically dictate by what fraction the total leader timeout should be reduced when a leader
+/// is found for the round. For the reduction to happen each time it is important for the leader of the previous
+/// position to have been found first. The rational is to reduce the total waiting time to timeout/propose every time
+/// that we have successfully received a leader in order.
+pub(crate) const DEFAULT_LEADER_TIMEOUT_WEIGHTS: [u32; NUM_LEADERS_PER_ROUND] = [100];
 
 pub(crate) struct LeaderTimeoutTaskHandle {
     handle: JoinHandle<()>,
@@ -27,8 +40,9 @@ impl LeaderTimeoutTaskHandle {
 pub(crate) struct LeaderTimeoutTask<D: CoreThreadDispatcher> {
     dispatcher: Arc<D>,
     new_round_receiver: watch::Receiver<Round>,
-    leader_timeout: Duration,
     stop: Receiver<()>,
+    leader_timeout: Duration,
+    leader_timeout_weights: Vec<u32>,
 }
 
 impl<D: CoreThreadDispatcher> LeaderTimeoutTask<D> {
@@ -36,13 +50,16 @@ impl<D: CoreThreadDispatcher> LeaderTimeoutTask<D> {
         dispatcher: Arc<D>,
         signals_receivers: &CoreSignalsReceivers,
         context: Arc<Context>,
+        leader_timeout_weights: [u32; NUM_LEADERS_PER_ROUND],
     ) -> LeaderTimeoutTaskHandle {
+        assert_timeout_weights(leader_timeout_weights);
         let (stop_sender, stop) = tokio::sync::oneshot::channel();
         let mut me = Self {
             dispatcher,
             stop,
             new_round_receiver: signals_receivers.new_round_receiver(),
             leader_timeout: context.parameters.leader_timeout,
+            leader_timeout_weights: leader_timeout_weights.into_iter().collect::<Vec<_>>(),
         };
         let handle = tokio::spawn(async move { me.run().await });
 
@@ -53,6 +70,7 @@ impl<D: CoreThreadDispatcher> LeaderTimeoutTask<D> {
     }
 
     async fn run(&mut self) {
+        let _ = self.leader_timeout_weights;
         let new_round = &mut self.new_round_receiver;
         let mut leader_round: Round = *new_round.borrow_and_update();
         let mut leader_round_timed_out = false;
@@ -94,6 +112,14 @@ impl<D: CoreThreadDispatcher> LeaderTimeoutTask<D> {
     }
 }
 
+fn assert_timeout_weights(weights: [u32; NUM_LEADERS_PER_ROUND]) {
+    let mut total = 0;
+    for w in weights {
+        total += w;
+    }
+    assert_eq!(total, 100, "Total weight should be 100");
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -109,7 +135,7 @@ mod tests {
     use crate::context::Context;
     use crate::core::CoreSignals;
     use crate::core_thread::{CoreError, CoreThreadDispatcher};
-    use crate::leader_timeout::LeaderTimeoutTask;
+    use crate::leader_timeout::{LeaderTimeoutTask, DEFAULT_LEADER_TIMEOUT_WEIGHTS};
 
     #[derive(Clone, Default)]
     struct MockCoreThreadDispatcher {
@@ -160,7 +186,12 @@ mod tests {
         let (mut signals, signal_receivers) = CoreSignals::new();
 
         // spawn the task
-        let _handle = LeaderTimeoutTask::start(dispatcher.clone(), &signal_receivers, context);
+        let _handle = LeaderTimeoutTask::start(
+            dispatcher.clone(),
+            &signal_receivers,
+            context,
+            DEFAULT_LEADER_TIMEOUT_WEIGHTS,
+        );
 
         // send a signal that a new round has been produced.
         signals.new_round(10);
@@ -202,7 +233,12 @@ mod tests {
         let (mut signals, signal_receivers) = CoreSignals::new();
 
         // spawn the task
-        let _handle = LeaderTimeoutTask::start(dispatcher.clone(), &signal_receivers, context);
+        let _handle = LeaderTimeoutTask::start(
+            dispatcher.clone(),
+            &signal_receivers,
+            context,
+            DEFAULT_LEADER_TIMEOUT_WEIGHTS,
+        );
 
         // now send some signals with some small delay between them, but not enough so every round
         // manages to timeout and call the force new block method.

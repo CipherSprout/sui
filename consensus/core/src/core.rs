@@ -10,6 +10,10 @@ use consensus_config::ProtocolKeyPair;
 use mysten_metrics::monitored_scope;
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch};
+#[cfg(test)]
+use tokio::task::JoinHandle;
+#[cfg(test)]
+use tracing::trace;
 use tracing::warn;
 
 use crate::stake_aggregator::{QuorumThreshold, StakeAggregator};
@@ -32,7 +36,7 @@ use crate::{
 };
 
 // TODO: Move to protocol config once initial value is finalized.
-const NUM_LEADERS_PER_ROUND: usize = 1;
+pub(crate) const NUM_LEADERS_PER_ROUND: usize = 1;
 
 pub(crate) struct Core {
     context: Arc<Context>,
@@ -116,7 +120,7 @@ impl Core {
     fn recover(mut self) -> Self {
         // Recover the last available quorum to correctly advance the threshold clock.
         let last_quorum = self.dag_state.read().last_quorum();
-        self.add_accepted_blocks(last_quorum);
+        self.add_accepted_blocks(&last_quorum);
         // Try to commit and propose, since they may not have run after the last storage write.
         self.try_commit().unwrap();
         self.try_propose(true).unwrap();
@@ -134,15 +138,20 @@ impl Core {
 
         // Try to accept them via the block manager
         let (accepted_blocks, missing_blocks) = self.block_manager.try_accept_blocks(blocks);
+        if accepted_blocks.is_empty() {
+            return Ok(missing_blocks);
+        }
 
-        if !accepted_blocks.is_empty() {
-            // Now add accepted blocks to the threshold clock and pending ancestors list.
-            self.add_accepted_blocks(accepted_blocks);
+        // Now add accepted blocks to the threshold clock and pending ancestors list.
+        self.add_accepted_blocks(&accepted_blocks);
 
-            self.try_commit()?;
+        self.try_commit()?;
 
-            // Try to propose now since there are new blocks accepted.
-            self.try_propose(false)?;
+        // Try to propose now since there are new blocks accepted.
+        if self.try_propose(false)?.is_none() {
+            // we want to attempt to notify only when we haven't managed to successfully propose
+            // for the round, so we avoid triggering any unnecessary attempt to propose via the leader timeout.
+            self.notify_for_accepted_leaders(&accepted_blocks)?;
         }
 
         Ok(missing_blocks)
@@ -150,7 +159,7 @@ impl Core {
 
     /// Adds/processed all the newly `accepted_blocks`. We basically try to move the threshold clock and add them to the
     /// pending ancestors list.
-    fn add_accepted_blocks(&mut self, accepted_blocks: Vec<VerifiedBlock>) {
+    fn add_accepted_blocks(&mut self, accepted_blocks: &[VerifiedBlock]) {
         // Advance the threshold clock. If advanced to a new round then send a signal that a new quorum has been received.
         if let Some(new_round) = self
             .threshold_clock
@@ -166,6 +175,49 @@ impl Core {
             .node_metrics
             .threshold_clock_round
             .set(self.threshold_clock.get_round() as i64);
+    }
+
+    fn notify_for_accepted_leaders(
+        &mut self,
+        accepted_blocks: &[VerifiedBlock],
+    ) -> ConsensusResult<()> {
+        // Do not process if no accepted blocks exist
+        if accepted_blocks.is_empty() {
+            return Ok(());
+        }
+
+        // Look into the accepted blocks for the leaders for the last quorum round. Even if one is found
+        // then just take the snapshot of found leaders and emit the signal
+        let current_round = self.threshold_clock.get_round();
+        let quorum_round = current_round.saturating_sub(1);
+        let leaders = self.leaders(quorum_round);
+
+        // Do not process if is not a leader round
+        if leaders.is_empty() {
+            return Ok(());
+        }
+
+        let new_leader_received = accepted_blocks
+            .iter()
+            .any(|block| leaders.iter().any(|slot| *slot == Slot::from(block)));
+
+        // emit a signal that a leader has been received. Send the whole sequence of leaders that have
+        // been found so far.
+        if new_leader_received {
+            let mut accepted_leaders = vec![None; NUM_LEADERS_PER_ROUND];
+            for (i, leader) in leaders.into_iter().enumerate() {
+                let dag_state = self.dag_state.read();
+                if dag_state.contains_cached_block_at_slot(leader) {
+                    accepted_leaders[i] = Some(leader);
+                }
+            }
+
+            // emit the signal
+            self.signals
+                .leader_accepted(quorum_round, accepted_leaders)?;
+        }
+
+        Ok(())
     }
 
     /// Force creating a new block for the dictated round. This is used when a leader timeout occurs.
@@ -389,7 +441,8 @@ impl Core {
         true
     }
 
-    /// Returns the leaders of the provided round.
+    /// Returns the leaders of the provided round. The leaders are returned in the order that they
+    /// are evaluated in the commit rule.
     fn leaders(&self, round: Round) -> Vec<Slot> {
         self.committer
             .get_leaders(round)
@@ -412,6 +465,11 @@ impl Core {
 pub(crate) struct CoreSignals {
     tx_block_broadcast: broadcast::Sender<VerifiedBlock>,
     new_round_sender: watch::Sender<Round>,
+<<<<<<< HEAD
+=======
+    leader_accepted_sender: watch::Sender<(Round, Vec<Option<Slot>>)>,
+    block_ready_sender: watch::Sender<Option<BlockRef>>,
+>>>>>>> 2d80be9800 ([feat] send a signal when a leaders have been updated for a round)
 }
 
 impl CoreSignals {
@@ -422,15 +480,19 @@ impl CoreSignals {
         let (tx_block_broadcast, _rx_block_broadcast) =
             broadcast::channel::<VerifiedBlock>(Self::BROADCAST_BACKLOG_CAPACITY);
         let (new_round_sender, new_round_receiver) = watch::channel(0);
+        let (leader_accepted_sender, leader_accepted_receiver) =
+            watch::channel((0, vec![None; NUM_LEADERS_PER_ROUND]));
 
         let me = Self {
             tx_block_broadcast: tx_block_broadcast.clone(),
             new_round_sender,
+            leader_accepted_sender,
         };
 
         let receivers = CoreSignalsReceivers {
             tx_block_broadcast,
             new_round_receiver,
+            leader_accepted_receiver,
         };
 
         (me, receivers)
@@ -451,6 +513,21 @@ impl CoreSignals {
     pub fn new_round(&mut self, round_number: Round) {
         let _ = self.new_round_sender.send_replace(round_number);
     }
+
+    /// Sends a signal that a leader has been received for the round `round_number`. The whole array of
+    /// leaders is sent every time. The array contains the leaders in the order of evaluation with the
+    /// most left position being the leader with the highest priority. For each position a `Some` value
+    /// represents that the leader of the position has been found.
+    pub fn leader_accepted(
+        &mut self,
+        round_number: Round,
+        leaders: Vec<Option<Slot>>,
+    ) -> ConsensusResult<()> {
+        self.leader_accepted_sender
+            .send((round_number, leaders))
+            .map_err(|_err| ConsensusError::Shutdown)?;
+        Ok(())
+    }
 }
 
 /// Receivers of signals from Core.
@@ -458,6 +535,7 @@ impl CoreSignals {
 pub(crate) struct CoreSignalsReceivers {
     tx_block_broadcast: broadcast::Sender<VerifiedBlock>,
     new_round_receiver: watch::Receiver<Round>,
+    leader_accepted_receiver: watch::Receiver<(Round, Vec<Option<Slot>>)>,
 }
 
 impl CoreSignalsReceivers {
@@ -467,6 +545,29 @@ impl CoreSignalsReceivers {
 
     pub(crate) fn new_round_receiver(&self) -> watch::Receiver<Round> {
         self.new_round_receiver.clone()
+    }
+
+    #[allow(unused)]
+    pub(crate) fn leader_accepted_receiver(&self) -> watch::Receiver<(Round, Vec<Option<Slot>>)> {
+        self.leader_accepted_receiver.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_task_listen_all_signals(&self) -> JoinHandle<()> {
+        let mut leader_accepted_receiver = self.leader_accepted_receiver();
+        let mut new_round_receiver = self.new_round_receiver();
+        tokio::spawn(async move {
+            tokio::select! {
+               Ok(_) = leader_accepted_receiver.changed() => {
+                    let leaders = leader_accepted_receiver.borrow_and_update().clone();
+                    trace!("Leader accepted for round {}: {:?}", leaders.0, leaders.1);
+               },
+               Ok(_) = new_round_receiver.changed() => {
+                    let round = *new_round_receiver.borrow_and_update();
+                    trace!("New round received: {round}");
+                }
+            }
+        })
     }
 }
 
@@ -1133,6 +1234,9 @@ mod test {
             );
 
             let block_signer = signers.remove(index).1;
+
+            // Spin up a task to have at least one subscriber for all the signals
+            signal_receivers.test_task_listen_all_signals();
 
             let core = Core::new(
                 context,
