@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::block::Round;
 use crate::context::Context;
-use crate::core::{CoreSignalsReceivers, NUM_LEADERS_PER_ROUND};
+use crate::core::{CoreSignalsReceivers, DEFAULT_NUM_LEADERS_PER_ROUND};
 use crate::core_thread::CoreThreadDispatcher;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +23,8 @@ use tracing::{debug, warn};
 /// is found for the round. For the reduction to happen each time it is important for the leader of the previous
 /// position to have been found first. The rational is to reduce the total waiting time to timeout/propose every time
 /// that we have successfully received a leader in order.
-pub(crate) const DEFAULT_LEADER_TIMEOUT_WEIGHTS: [u32; NUM_LEADERS_PER_ROUND] = [100];
+#[allow(unused)]
+pub(crate) const DEFAULT_LEADER_TIMEOUT_WEIGHTS: [u32; DEFAULT_NUM_LEADERS_PER_ROUND] = [100];
 
 pub(crate) struct LeaderTimeoutTaskHandle {
     handle: JoinHandle<()>,
@@ -37,29 +38,32 @@ impl LeaderTimeoutTaskHandle {
     }
 }
 
-pub(crate) struct LeaderTimeoutTask<D: CoreThreadDispatcher> {
+pub(crate) struct LeaderTimeoutTask<
+    D: CoreThreadDispatcher,
+    const NUM_OF_LEADERS: usize = DEFAULT_NUM_LEADERS_PER_ROUND,
+> {
     dispatcher: Arc<D>,
     new_round_receiver: watch::Receiver<Round>,
     stop: Receiver<()>,
     leader_timeout: Duration,
-    leader_timeout_weights: Vec<u32>,
+    leader_timeout_weights: [u32; NUM_OF_LEADERS],
 }
 
-impl<D: CoreThreadDispatcher> LeaderTimeoutTask<D> {
+impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, NUM_OF_LEADERS> {
     pub fn start(
         dispatcher: Arc<D>,
         signals_receivers: &CoreSignalsReceivers,
         context: Arc<Context>,
-        leader_timeout_weights: [u32; NUM_LEADERS_PER_ROUND],
+        leader_timeout_weights: [u32; NUM_OF_LEADERS],
     ) -> LeaderTimeoutTaskHandle {
-        assert_timeout_weights(leader_timeout_weights);
+        //assert_timeout_weights(leader_timeout_weights);
         let (stop_sender, stop) = tokio::sync::oneshot::channel();
         let mut me = Self {
             dispatcher,
             stop,
             new_round_receiver: signals_receivers.new_round_receiver(),
             leader_timeout: context.parameters.leader_timeout,
-            leader_timeout_weights: leader_timeout_weights.into_iter().collect::<Vec<_>>(),
+            leader_timeout_weights,
         };
         let handle = tokio::spawn(async move { me.run().await });
 
@@ -112,7 +116,8 @@ impl<D: CoreThreadDispatcher> LeaderTimeoutTask<D> {
     }
 }
 
-fn assert_timeout_weights(weights: [u32; NUM_LEADERS_PER_ROUND]) {
+#[allow(unused)]
+fn assert_timeout_weights(weights: &[u32]) {
     let mut total = 0;
     for w in weights {
         total += w;
@@ -123,6 +128,7 @@ fn assert_timeout_weights(weights: [u32; NUM_LEADERS_PER_ROUND]) {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::num::NonZeroUsize;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -133,7 +139,7 @@ mod tests {
 
     use crate::block::{BlockRef, Round, VerifiedBlock};
     use crate::context::Context;
-    use crate::core::CoreSignals;
+    use crate::core::{CoreSignals, DEFAULT_NUM_LEADERS_PER_ROUND};
     use crate::core_thread::{CoreError, CoreThreadDispatcher};
     use crate::leader_timeout::{LeaderTimeoutTask, DEFAULT_LEADER_TIMEOUT_WEIGHTS};
 
@@ -176,6 +182,7 @@ mod tests {
         let (context, _signers) = Context::new_for_test(4);
         let dispatcher = Arc::new(MockCoreThreadDispatcher::default());
         let leader_timeout = Duration::from_millis(500);
+        let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
         let parameters = Parameters {
             leader_timeout,
             ..Default::default()
@@ -183,7 +190,7 @@ mod tests {
         let context = Arc::new(context.with_parameters(parameters));
         let start = Instant::now();
 
-        let (mut signals, signal_receivers) = CoreSignals::new();
+        let (mut signals, signal_receivers) = CoreSignals::new(num_of_leaders);
 
         // spawn the task
         let _handle = LeaderTimeoutTask::start(
@@ -227,10 +234,11 @@ mod tests {
             leader_timeout,
             ..Default::default()
         };
+        let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
         let context = Arc::new(context.with_parameters(parameters));
         let now = Instant::now();
 
-        let (mut signals, signal_receivers) = CoreSignals::new();
+        let (mut signals, signal_receivers) = CoreSignals::new(num_of_leaders);
 
         // spawn the task
         let _handle = LeaderTimeoutTask::start(

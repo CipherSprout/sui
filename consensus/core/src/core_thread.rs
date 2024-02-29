@@ -174,9 +174,11 @@ impl CoreThreadDispatcher for ChannelCoreThreadDispatcher {
 #[cfg(test)]
 mod test {
     use parking_lot::RwLock;
+    use std::num::NonZeroUsize;
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
+    use crate::core::DEFAULT_NUM_LEADERS_PER_ROUND;
     use crate::{
         block_manager::BlockManager,
         block_verifier::NoopBlockVerifier,
@@ -206,8 +208,10 @@ mod test {
         );
         let (_transaction_client, tx_receiver) = TransactionClient::new(context.clone());
         let transaction_consumer = TransactionConsumer::new(tx_receiver, context.clone(), None);
-        let (signals, signal_receivers) = CoreSignals::new();
+        let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
+        let (signals, signal_receivers) = CoreSignals::new(num_of_leaders);
         let _block_receiver = signal_receivers.block_broadcast_receiver();
+
         let (sender, _receiver) = unbounded_channel();
         let commit_observer = CommitObserver::new(
             context.clone(),
@@ -224,6 +228,7 @@ mod test {
             signals,
             key_pairs.remove(context.own_index.value()).1,
             dag_state,
+            num_of_leaders,
         );
 
         let (core_dispatcher, handle) = ChannelCoreThreadDispatcher::start(core, context);
