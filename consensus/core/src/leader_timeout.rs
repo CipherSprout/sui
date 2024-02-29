@@ -1,6 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
-use crate::block::Round;
+use crate::block::{Round, Slot};
 use crate::context::Context;
 use crate::core::{CoreSignalsReceivers, DEFAULT_NUM_LEADERS_PER_ROUND};
 use crate::core_thread::CoreThreadDispatcher;
@@ -43,7 +43,7 @@ pub(crate) struct LeaderTimeoutTask<
     const NUM_OF_LEADERS: usize = DEFAULT_NUM_LEADERS_PER_ROUND,
 > {
     dispatcher: Arc<D>,
-    new_round_receiver: watch::Receiver<Round>,
+    leader_update_receiver: watch::Receiver<(Round, Vec<Option<Slot>>)>,
     stop: Receiver<()>,
     leader_timeout: Duration,
     leader_timeout_weights: [u32; NUM_OF_LEADERS],
@@ -56,12 +56,13 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
         context: Arc<Context>,
         leader_timeout_weights: [u32; NUM_OF_LEADERS],
     ) -> LeaderTimeoutTaskHandle {
-        //assert_timeout_weights(leader_timeout_weights);
+        assert_timeout_weights(&leader_timeout_weights);
+
         let (stop_sender, stop) = tokio::sync::oneshot::channel();
         let mut me = Self {
             dispatcher,
             stop,
-            new_round_receiver: signals_receivers.new_round_receiver(),
+            leader_update_receiver: signals_receivers.leader_update_receiver(),
             leader_timeout: context.parameters.leader_timeout,
             leader_timeout_weights,
         };
@@ -75,8 +76,8 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
 
     async fn run(&mut self) {
         let _ = self.leader_timeout_weights;
-        let new_round = &mut self.new_round_receiver;
-        let mut leader_round: Round = *new_round.borrow_and_update();
+        let leader_update = &mut self.leader_update_receiver;
+        let (mut leader_round, _) = leader_update.borrow_and_update().clone();
         let mut leader_round_timed_out = false;
         let timer_start = Instant::now();
         let leader_timeout = sleep_until(timer_start + self.leader_timeout);
@@ -89,16 +90,19 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
                 // If we already timed out before then the branch gets disabled so we don't attempt
                 // all the time to produce already produced blocks for that round.
                 () = &mut leader_timeout, if !leader_round_timed_out => {
-                    if let Err(err) = self.dispatcher.force_new_block(leader_round).await {
+                    if let Err(err) = self.dispatcher.force_new_block(leader_round.saturating_add(1)).await {
                         warn!("Error received while calling dispatcher, probably dispatcher is shutting down, will now exit: {err:?}");
                         return;
                     }
                     leader_round_timed_out = true;
                 }
 
-                // a new round has been produced. Reset the leader timeout.
-                Ok(_) = new_round.changed() => {
-                    leader_round = *new_round.borrow_and_update();
+                // Either a new quorum round has been produced or new leaders have been accepted. Reset the leader timeout.
+                Ok(_) = leader_update.changed() => {
+                    let (round, leaders) = leader_update.borrow_and_update().clone();
+                    assert_eq!(leaders.len(), NUM_OF_LEADERS, "Number of expected leaders differ from the leader timeout weight setup");
+
+                    leader_round = round;
                     debug!("New round has been received {leader_round}, resetting timer");
 
                     leader_round_timed_out = false;
@@ -116,7 +120,6 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
     }
 }
 
-#[allow(unused)]
 fn assert_timeout_weights(weights: &[u32]) {
     let mut total = 0;
     for w in weights {
@@ -201,7 +204,9 @@ mod tests {
         );
 
         // send a signal that a new round has been produced.
-        signals.new_round(10);
+        signals
+            .leader_update(9, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .ok();
 
         // wait enough until a force_new_block has been received
         sleep(2 * leader_timeout).await;
@@ -250,11 +255,17 @@ mod tests {
 
         // now send some signals with some small delay between them, but not enough so every round
         // manages to timeout and call the force new block method.
-        signals.new_round(13);
+        signals
+            .leader_update(12, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .ok();
         sleep(leader_timeout / 2).await;
-        signals.new_round(14);
+        signals
+            .leader_update(13, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .ok();
         sleep(leader_timeout / 2).await;
-        signals.new_round(15);
+        signals
+            .leader_update(14, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .ok();
         sleep(2 * leader_timeout).await;
 
         // only the last one should be received

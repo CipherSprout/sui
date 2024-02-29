@@ -172,6 +172,11 @@ impl Core {
         {
             // notify that threshold clock advanced to new round
             self.signals.new_round(new_round);
+
+            // notify about the leader status for the last quorum round
+            let quorum_round = new_round.saturating_sub(1);
+            self.signals
+                .leader_update(quorum_round, vec![None; self.num_of_leaders.get()])?;
         }
 
         // Report the threshold clock round
@@ -218,8 +223,7 @@ impl Core {
             }
 
             // emit the signal
-            self.signals
-                .leader_accepted(quorum_round, accepted_leaders)?;
+            self.signals.leader_update(quorum_round, accepted_leaders)?;
         }
 
         Ok(())
@@ -493,7 +497,7 @@ impl CoreSignals {
         let receivers = CoreSignalsReceivers {
             tx_block_broadcast,
             new_round_receiver,
-            leader_accepted_receiver,
+            leader_update_receiver: leader_accepted_receiver,
         };
 
         (me, receivers)
@@ -515,11 +519,11 @@ impl CoreSignals {
         let _ = self.new_round_sender.send_replace(round_number);
     }
 
-    /// Sends a signal that a leader has been received for the round `round_number`. The whole array of
+    /// Sends a signal about an update on the leader round `round_number`. The whole array of
     /// leaders is sent every time. The array contains the leaders in the order of evaluation with the
     /// most left position being the leader with the highest priority. For each position a `Some` value
     /// represents that the leader of the position has been found.
-    pub fn leader_accepted(
+    pub fn leader_update(
         &mut self,
         round_number: Round,
         leaders: Vec<Option<Slot>>,
@@ -536,7 +540,7 @@ impl CoreSignals {
 pub(crate) struct CoreSignalsReceivers {
     tx_block_broadcast: broadcast::Sender<VerifiedBlock>,
     new_round_receiver: watch::Receiver<Round>,
-    leader_accepted_receiver: watch::Receiver<(Round, Vec<Option<Slot>>)>,
+    leader_update_receiver: watch::Receiver<(Round, Vec<Option<Slot>>)>,
 }
 
 impl CoreSignalsReceivers {
@@ -549,18 +553,18 @@ impl CoreSignalsReceivers {
     }
 
     #[allow(unused)]
-    pub(crate) fn leader_accepted_receiver(&self) -> watch::Receiver<(Round, Vec<Option<Slot>>)> {
-        self.leader_accepted_receiver.clone()
+    pub(crate) fn leader_update_receiver(&self) -> watch::Receiver<(Round, Vec<Option<Slot>>)> {
+        self.leader_update_receiver.clone()
     }
 
     #[cfg(test)]
     pub(crate) fn test_task_listen_all_signals(&self) -> JoinHandle<()> {
-        let mut leader_accepted_receiver = self.leader_accepted_receiver();
+        let mut leader_update_receiver = self.leader_update_receiver();
         let mut new_round_receiver = self.new_round_receiver();
         tokio::spawn(async move {
             tokio::select! {
-               Ok(_) = leader_accepted_receiver.changed() => {
-                    let leaders = leader_accepted_receiver.borrow_and_update().clone();
+               Ok(_) = leader_update_receiver.changed() => {
+                    let leaders = leader_update_receiver.borrow_and_update().clone();
                     trace!("Leader accepted for round {}: {:?}", leaders.0, leaders.1);
                },
                Ok(_) = new_round_receiver.changed() => {
@@ -1083,7 +1087,7 @@ mod test {
                 // We do not expect to receive a signal for updated leaders as we already proposed
                 // A "new round" signal should be received given that all the blocks of previous round have been processed
                 let (leader_round, leaders) = signal_receivers
-                    .leader_accepted_receiver()
+                    .leader_update_receiver()
                     .borrow_and_update()
                     .clone();
                 assert_eq!(leader_round, 0);
