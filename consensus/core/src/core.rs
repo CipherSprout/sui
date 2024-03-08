@@ -301,7 +301,7 @@ impl Core {
         let ancestors = self
             .dag_state
             .read()
-            .get_last_block_per_authority(Some(clock_round - 1));
+            .get_last_cached_block_per_authority(Some(clock_round - 1));
 
         // Propose only ancestors of higher rounds than what has already been proposed
         let ancestors = ancestors
@@ -377,7 +377,7 @@ impl Core {
             // Search for all the leaders. If at least one is not found, then return false.
             // A linear search should be fine here as the set of elements is not expected to be small enough and more sophisticated
             // data structures might not give us much here.
-            if !dag_state.contains_block_at_slot(leader) {
+            if !dag_state.contains_cached_block_at_slot(leader) {
                 return false;
             }
         }
