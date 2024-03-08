@@ -115,7 +115,6 @@ impl Core {
 
     fn recover(mut self) -> Self {
         // Recover the last available quorum to correctly advance the threshold clock.
-        // TODO: run commit and propose logic, or just use add_blocks() instead of add_accepted_blocks().
         let last_quorum = self.dag_state.read().last_quorum();
         self.add_accepted_blocks(last_quorum);
         // Try to commit and propose, since they may not have run after the last storage write.
@@ -302,6 +301,11 @@ impl Core {
             .dag_state
             .read()
             .get_last_cached_block_per_authority(Some(clock_round - 1));
+        assert_eq!(
+            ancestors.len(),
+            self.context.committee.size(),
+            "Fatal error, number of returned ancestors don't match committee size."
+        );
 
         // Propose only ancestors of higher rounds than what has already been proposed
         let ancestors = ancestors
