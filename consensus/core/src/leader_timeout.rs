@@ -1,6 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
-use crate::block::GENESIS_ROUND;
+use crate::block::{Slot, GENESIS_ROUND};
 use crate::context::Context;
 use crate::core::{CoreSignalsReceivers, QuorumUpdate, DEFAULT_NUM_LEADERS_PER_ROUND};
 use crate::core_thread::CoreThreadDispatcher;
@@ -12,6 +12,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep_until, Instant};
 use tracing::{debug, warn};
+
+#[allow(unused)]
+const TOTAL_LEADER_TIMEOUT_WEIGHT: u32 = 100;
 
 /// The leader timeout weights used to update the remaining timeout according to each leader weight.
 /// Each position on the array represents the weight of the leader of a round according to their ordered position.
@@ -25,7 +28,8 @@ use tracing::{debug, warn};
 /// position to have been found first. The rational is to reduce the total waiting time to timeout/propose every time
 /// that we have successfully received a leader in order.
 #[allow(unused)]
-pub(crate) const DEFAULT_LEADER_TIMEOUT_WEIGHTS: [u32; DEFAULT_NUM_LEADERS_PER_ROUND] = [100];
+pub(crate) const DEFAULT_LEADER_TIMEOUT_WEIGHTS: [u32; DEFAULT_NUM_LEADERS_PER_ROUND] =
+    [TOTAL_LEADER_TIMEOUT_WEIGHT];
 
 pub(crate) struct LeaderTimeoutTaskHandle {
     handle: JoinHandle<()>,
@@ -76,13 +80,11 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
     }
 
     async fn run(&mut self) {
-        let _ = self.leader_timeout_weights;
-        let quorum_update = &mut self.quorum_update_receiver;
-        let mut last_quorum_update: QuorumUpdate = quorum_update.borrow_and_update().clone();
+        let mut last_quorum_update: QuorumUpdate = QuorumUpdate::default();
 
         let mut leader_round_timed_out = false;
-        let timer_start = Instant::now();
-        let leader_timeout = sleep_until(timer_start + self.leader_timeout);
+        let mut last_quorum_time = Instant::now();
+        let leader_timeout = sleep_until(last_quorum_time + self.leader_timeout);
 
         tokio::pin!(leader_timeout);
 
@@ -100,11 +102,12 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
                 }
 
                 // Either a new quorum round has been produced or new leaders have been accepted. Reset the leader timeout.
-                Ok(_) = quorum_update.changed() => {
-                    let update: QuorumUpdate = quorum_update.borrow_and_update().clone();
+                Ok(_) = self.quorum_update_receiver.changed() => {
+                    let update: QuorumUpdate = self.quorum_update_receiver.borrow_and_update().clone();
 
-                    assert!(update.round > GENESIS_ROUND, "Unexpected receive of update for genesis round!");
-                    assert_eq!(update.leaders.len(), NUM_OF_LEADERS, "Number of expected leaders differ from the leader timeout weight setup");
+                    if update.round > GENESIS_ROUND {
+                        assert_eq!(update.leaders.len(), NUM_OF_LEADERS, "Number of expected leaders differ from the leader timeout weight setup");
+                    }
 
                     match update.round.cmp(&last_quorum_update.round) {
                         Ordering::Less => {
@@ -112,22 +115,28 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
                             continue;
                         }
                         Ordering::Equal => {
-                            // Update the leader timeout
-                        }
-                        Ordering::Greater => {
-                            //1. Now reset the timer.
-                            debug!("New round has been received {}, resetting timer", update.round);
-                            last_quorum_update = update;
-
-                            leader_round_timed_out = false;
+                            // Nothing changed on the updated leaders, so just continue
+                            if update.leaders.eq(&last_quorum_update.leaders) {
+                                continue;
+                            }
 
                             leader_timeout
                             .as_mut()
-                            .reset(Instant::now() + self.leader_timeout);
+                            .reset(last_quorum_time + self.calculate_leader_timeout(&update.leaders));
+                        }
+                        Ordering::Greater => {
+                            debug!("New round has been received {}, resetting timer", update.round);
 
-                            //2. Update the leader timeout
+                            leader_round_timed_out = false;
+                            last_quorum_time = Instant::now();
+
+                            leader_timeout
+                            .as_mut()
+                            .reset(last_quorum_time + self.calculate_leader_timeout(&update.leaders));
                         }
                     }
+
+                    last_quorum_update = update;
                 },
                 _ = &mut self.stop => {
                     debug!("Stop signal has been received, now shutting down");
@@ -136,6 +145,26 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
             }
         }
     }
+
+    // Calculates the leader(s) timeout. The timeout is calculated based on the number of total
+    // expected leaders and the configured timeout weights.
+    fn calculate_leader_timeout(&self, leaders: &[Option<Slot>]) -> Duration {
+        // The most important leader is located in position 0 for the `leaders` array.
+        // The least important is last. We want to sum the weight only based
+        // on the found leaders. Once a `None` is found - meaning a leader is missing for that slot -
+        // we want to abort as we don't want to expense its position from waiting.
+        let mut weight = 0;
+        for (i, leader) in leaders.iter().enumerate() {
+            if leader.is_some() {
+                weight += self.leader_timeout_weights[i];
+            } else {
+                break;
+            }
+        }
+
+        // Now calculate the updated timeout time
+        self.leader_timeout - (weight * self.leader_timeout) / TOTAL_LEADER_TIMEOUT_WEIGHT
+    }
 }
 
 fn assert_timeout_weights(weights: &[u32]) {
@@ -143,7 +172,10 @@ fn assert_timeout_weights(weights: &[u32]) {
     for w in weights {
         total += w;
     }
-    assert_eq!(total, 100, "Total weight should be 100");
+    assert_eq!(
+        total, TOTAL_LEADER_TIMEOUT_WEIGHT,
+        "Total weight should be 100"
+    );
 }
 
 #[cfg(test)]
@@ -153,11 +185,11 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use consensus_config::Parameters;
+    use consensus_config::{AuthorityIndex, Parameters};
     use parking_lot::Mutex;
     use tokio::time::{sleep, Instant};
 
-    use crate::block::{BlockRef, Round, VerifiedBlock};
+    use crate::block::{BlockRef, Round, Slot, VerifiedBlock};
     use crate::context::Context;
     use crate::core::{CoreSignals, DEFAULT_NUM_LEADERS_PER_ROUND};
     use crate::core_thread::{CoreError, CoreThreadDispatcher};
@@ -288,5 +320,81 @@ mod tests {
         let (round, timestamp) = all_calls[0];
         assert_eq!(round, 15);
         assert!(leader_timeout < timestamp - now);
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn multiple_quorum_updates_for_same_round() {
+        const NUM_OF_LEADERS_PER_ROUND: usize = 3;
+        let (context, _signers) = Context::new_for_test(4);
+        let dispatcher = Arc::new(MockCoreThreadDispatcher::default());
+        let leader_timeout = Duration::from_millis(500);
+        let parameters = Parameters {
+            leader_timeout,
+            ..Default::default()
+        };
+        let context = Arc::new(context.with_parameters(parameters));
+        let now = Instant::now();
+
+        let (mut signals, signal_receivers) = CoreSignals::new();
+
+        // We expected 3 leaders. For each leader we set the weight.
+        let timeout_weights = [40, 30, 30];
+
+        // spawn the task
+        let _handle = LeaderTimeoutTask::start(
+            dispatcher.clone(),
+            &signal_receivers,
+            context,
+            timeout_weights,
+        );
+
+        // Send a quorum update for round 12 and without leaders found. This will reset the timer and
+        // adjust in order to timeout with maximum default value - 500ms
+        signals
+            .quorum_update(12, vec![None; NUM_OF_LEADERS_PER_ROUND])
+            .ok();
+        sleep(Duration::from_millis(100)).await;
+
+        // Now send an update for a leader found on the second position, nothing should change on the
+        // expected leader timeout as we still miss a more important leader on the left - the one from first position.
+        // So we want to wait for the leader of position one before we adjust the timer.
+        signals
+            .quorum_update(
+                12,
+                vec![
+                    None,
+                    Some(Slot::new(12, AuthorityIndex::new_for_test(2))),
+                    None,
+                ],
+            )
+            .ok();
+        sleep(Duration::from_millis(100)).await;
+
+        // Now send an update that we have found a leader in first position. So we now have found the leaders
+        // on the first and second position. The total leader timeout should be reduced according to the weights by:
+        // 1) 40 * 500 / 100 = 200ms
+        // 2) 30 * 50 / 100 = 150ms
+        // So in total the timeout should be reduced from the initial 500ms to 500ms - 200ms - 150ms = 150ms.
+        // The timeout should be reset to ensure that for the round 12 we will (or have already) waited at most 150ms
+        // before attempting for produce a new block.
+        signals
+            .quorum_update(
+                12,
+                vec![
+                    Some(Slot::new(12, AuthorityIndex::new_for_test(3))),
+                    Some(Slot::new(12, AuthorityIndex::new_for_test(2))),
+                    None,
+                ],
+            )
+            .ok();
+
+        // Give a little bit of time to make sure that the new block call has run
+        sleep(Duration::from_millis(50)).await;
+
+        // only the last one should be received
+        let all_calls = dispatcher.get_force_new_block_calls().await;
+        let (round, timestamp) = all_calls[0];
+        assert_eq!(round, 13);
+        assert!(timestamp - now < Duration::from_millis(250));
     }
 }

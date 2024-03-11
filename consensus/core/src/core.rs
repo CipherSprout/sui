@@ -156,10 +156,6 @@ impl Core {
         // Try to propose now since there are new blocks accepted.
         self.try_propose(false)?;
 
-        // Notify for the leader updates after trying to propose. This will ensure that the leader timeout
-        // component will receive the available leaders for the latest available formed quorum round.
-        self.notify_quorum_updates()?;
-
         Ok(missing_blocks)
     }
 
@@ -191,6 +187,9 @@ impl Core {
             self.signals.new_round(new_round);
         }
 
+        // Notify about any updates on the last quorum
+        self.notify_quorum_updates(accepted_blocks)?;
+
         // Report the threshold clock round
         self.context
             .metrics
@@ -200,17 +199,26 @@ impl Core {
         Ok(())
     }
 
-    fn notify_quorum_updates(&mut self) -> ConsensusResult<()> {
+    fn notify_quorum_updates(&mut self, accepted_blocks: &[VerifiedBlock]) -> ConsensusResult<()> {
         // Look into the accepted blocks for the leaders for the last quorum round. Even if one is found
         // then just take the snapshot of found leaders and emit the signal
         let current_round = self.threshold_clock.get_round();
+        let quorum_round = current_round.saturating_sub(1);
 
-        // No reason to send any updates if we already proposed after the last available quorum.
+        // No reason to send any updates if we already proposed after the last available quorum and
+        // still the next quorum has not been formed.
         if self.last_proposed_round() == current_round {
             return Ok(());
         }
 
-        let quorum_round = current_round.saturating_sub(1);
+        // No reason to send any updates if none of the accepted blocks refer to the last quorum round
+        if !accepted_blocks
+            .iter()
+            .any(|block| block.round() == quorum_round)
+        {
+            return Ok(());
+        }
+
         let leaders = self.leaders(quorum_round);
 
         // Do not attempt to give any update if is not a leader round
@@ -239,7 +247,7 @@ impl Core {
         &mut self,
         ignore_leaders_check: bool,
     ) -> ConsensusResult<Option<VerifiedBlock>> {
-        if let Some(block) = self.try_new_block(ignore_leaders_check) {
+        if let Some(block) = self.try_new_block(ignore_leaders_check)? {
             // When there is only one authority in committee, it is unnecessary to broadcast
             // the block which will fail anyway without subscribers to the signal.
             if self.context.committee.size() > 1 {
@@ -254,16 +262,19 @@ impl Core {
 
     /// Attempts to propose a new block for the next round. If a block has already proposed for latest
     /// or earlier round, then no block is created and None is returned.
-    fn try_new_block(&mut self, ignore_leaders_check: bool) -> Option<VerifiedBlock> {
+    fn try_new_block(
+        &mut self,
+        ignore_leaders_check: bool,
+    ) -> ConsensusResult<Option<VerifiedBlock>> {
         let _scope = monitored_scope("Core::try_new_block");
         let clock_round = self.threshold_clock.get_round();
         if clock_round <= self.last_proposed_round() {
-            return None;
+            return Ok(None);
         }
         // Create a new block either because we want to "forcefully" propose a block due to a leader timeout,
         // or because we are actually ready to produce the block (leader exists)
         if !(ignore_leaders_check || self.last_quorum_leaders_exist()) {
-            return None;
+            return Ok(None);
         }
 
         // TODO: produce the block for the clock_round. As the threshold clock can advance many rounds at once (ex
@@ -296,21 +307,15 @@ impl Core {
         // Unnecessary to verify own blocks.
         let verified_block = VerifiedBlock::new_verified(signed_block, serialized);
 
-        // 4. Add to the threshold clock and pending ancestors
-        if let Some(new_round) = self
-            .threshold_clock
-            .add_blocks(vec![verified_block.reference()])
-        {
-            // notify that threshold clock advanced to new round
-            self.signals.new_round(new_round);
-        }
-
-        // 5. Accept the block into BlockManager and DagState.
+        // 4. Accept the block into BlockManager and DagState.
         let (accepted_blocks, missing) = self
             .block_manager
             .try_accept_blocks(vec![verified_block.clone()]);
         assert_eq!(accepted_blocks.len(), 1);
         assert!(missing.is_empty());
+
+        // 5. Accept the block in core to advance threshold clock etc
+        self.add_accepted_blocks(&accepted_blocks)?;
 
         // 6. Ensure the new block and its ancestors are persisted, before broadcasting it.
         self.dag_state.write().flush();
@@ -320,7 +325,7 @@ impl Core {
 
         tracing::info!("Created block {}", verified_block);
 
-        Some(verified_block)
+        Ok(Some(verified_block))
     }
 
     /// Runs commit rule to attempt to commit additional blocks from the DAG.
@@ -556,7 +561,6 @@ impl CoreSignalsReceivers {
         self.new_round_receiver.clone()
     }
 
-    #[allow(unused)]
     pub(crate) fn quorum_update_receiver(&self) -> watch::Receiver<QuorumUpdate> {
         self.quorum_update_receiver.clone()
     }
@@ -1088,25 +1092,15 @@ mod test {
                 .await;
                 assert_eq!(new_round, round);
 
-                // We do not expect to receive a signal for updated leaders as we already proposed
-                // A "new round" signal should be received given that all the blocks of previous round have been processed
+                // We do not expect to receive a signal for a quorum update as we already proposed and
+                // there is no reason to pass an update.
                 let quorum_update = signal_receivers
                     .quorum_update_receiver()
                     .borrow_and_update()
                     .clone();
-                assert_eq!(quorum_update.round, 0);
-                assert!(quorum_update.leaders.iter().all(Option::is_none));
-
-                /*
-                // Check that a new block has been proposed
-                let block_ref = receive(
-                    Duration::from_secs(1),
-                    signal_receivers.block_ready_receiver(),
-                )
-                .await
-                .unwrap();
-                assert_eq!(block_ref.round, round);
-                assert_eq!(block_ref.author, core.context.own_index);*/
+                assert_eq!(quorum_update.round, round - 1);
+                assert_eq!(quorum_update.leaders.len(), 1);
+                assert!(quorum_update.leaders.iter().all(Option::is_some));
 
                 // append the new block to this round blocks
                 this_round_blocks.push(core.last_proposed_block().clone());
@@ -1145,9 +1139,6 @@ mod test {
             assert_eq!(all_stored_commits.len(), 7);
         }
     }
-
-    #[tokio::test]
-    async fn test_notify_leader_update() {}
 
     #[tokio::test]
     async fn test_core_compress_proposal_references() {
