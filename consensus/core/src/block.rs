@@ -81,6 +81,7 @@ pub trait BlockAPI {
     fn timestamp_ms(&self) -> BlockTimestampMs;
     fn ancestors(&self) -> &[BlockRef];
     fn transactions(&self) -> &[Transaction];
+    fn slot(&self) -> Slot;
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -148,6 +149,10 @@ impl BlockAPI for BlockV1 {
 
     fn transactions(&self) -> &[Transaction] {
         &self.transactions
+    }
+
+    fn slot(&self) -> Slot {
+        Slot::new(self.round, self.author)
     }
 }
 
@@ -246,7 +251,7 @@ impl AsRef<[u8]> for BlockDigest {
 /// Slot is the position of blocks in the DAG. It can contain 0, 1 or multiple blocks
 /// from the same authority at the same round.
 #[derive(Clone, Copy, PartialEq, PartialOrd, Default, Hash)]
-pub(crate) struct Slot {
+pub struct Slot {
     pub round: Round,
     pub authority: AuthorityIndex,
 }
@@ -462,15 +467,6 @@ impl VerifiedBlock {
         let mut hasher = DefaultHashFunction::new();
         hasher.update(serialized);
         BlockDigest(hasher.finalize().into())
-    }
-}
-
-impl From<&VerifiedBlock> for Slot {
-    fn from(value: &VerifiedBlock) -> Self {
-        Self {
-            round: value.round(),
-            authority: value.author(),
-        }
     }
 }
 
