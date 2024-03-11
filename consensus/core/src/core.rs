@@ -156,6 +156,9 @@ impl Core {
         // Try to propose now since there are new blocks accepted.
         self.try_propose(false)?;
 
+        // Notify about any updates on the last quorum
+        self.notify_quorum_updates()?;
+
         Ok(missing_blocks)
     }
 
@@ -179,19 +182,13 @@ impl Core {
     /// pending ancestors list.
     fn add_accepted_blocks(&mut self, accepted_blocks: &[VerifiedBlock]) -> ConsensusResult<()> {
         // Advance the threshold clock. If advanced to a new round then send a signal that a new quorum has been received.
-        let new_quorum = if let Some(new_round) = self
+        if let Some(new_round) = self
             .threshold_clock
             .add_blocks(accepted_blocks.iter().map(|b| b.reference()).collect())
         {
             // notify that threshold clock advanced to new round
             self.signals.new_round(new_round);
-            true
-        } else {
-            false
-        };
-
-        // Notify about any updates on the last quorum
-        self.notify_quorum_updates(accepted_blocks, new_quorum)?;
+        }
 
         // Report the threshold clock round
         self.context
@@ -203,34 +200,22 @@ impl Core {
     }
 
     /// The method will emit a signal update on the latest formed quorum when a new leader for that
-    /// round has been accepted. Also, if `ignore_leader_checks` is true, then the method will simply emit a signal
-    /// irrespective of the leaders change status.
-    fn notify_quorum_updates(
-        &mut self,
-        accepted_blocks: &[VerifiedBlock],
-        ignore_leader_checks: bool,
-    ) -> ConsensusResult<()> {
+    /// round has been accepted. That will be done so only if we haven't already proposed for the round
+    /// after the last quorum.
+    fn notify_quorum_updates(&mut self) -> ConsensusResult<()> {
         // Look into the accepted blocks for the leaders for the last quorum round. Even if one is found
         // then just take the snapshot of found leaders and emit the signal
         let current_round = self.threshold_clock.get_round();
         let quorum_round = current_round.saturating_sub(1);
 
-        // Do not attempt to give any update if is not a leader round
-        let leaders = self.leaders(quorum_round);
-        if leaders.is_empty() {
+        // If we have already proposed for the latest round, then do not emit any event for the last quorum
+        if self.last_proposed_round() == current_round {
             return Ok(());
         }
 
-        // No reason to send any updates if none of the accepted blocks is a leader of the last quorum
-        // or not directed to ignore the leader checks.
-        if !ignore_leader_checks
-            && !accepted_blocks.iter().any(|block| {
-                leaders
-                    .iter()
-                    .find(|leader| *leader == block.into())
-                    .is_some()
-            })
-        {
+        // Do not attempt to give any update if is not a leader round
+        let leaders = self.leaders(quorum_round);
+        if leaders.is_empty() {
             return Ok(());
         }
 
@@ -478,7 +463,7 @@ impl Core {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct QuorumUpdate {
     pub round: Round,
     pub leaders: Vec<Option<Slot>>,
@@ -489,6 +474,7 @@ pub(crate) struct CoreSignals {
     tx_block_broadcast: broadcast::Sender<VerifiedBlock>,
     new_round_sender: watch::Sender<Round>,
     quorum_update_sender: watch::Sender<QuorumUpdate>,
+    last_quorum_update: QuorumUpdate,
 }
 
 impl CoreSignals {
@@ -496,16 +482,18 @@ impl CoreSignals {
     const BROADCAST_BACKLOG_CAPACITY: usize = 1000;
 
     pub fn new() -> (Self, CoreSignalsReceivers) {
+        let last_quorum_update = QuorumUpdate::default();
         let (tx_block_broadcast, _rx_block_broadcast) =
             broadcast::channel::<VerifiedBlock>(Self::BROADCAST_BACKLOG_CAPACITY);
         let (new_round_sender, new_round_receiver) = watch::channel(0);
         let (quorum_update_sender, quorum_update_receiver) =
-            watch::channel(QuorumUpdate::default());
+            watch::channel(last_quorum_update.clone());
 
         let me = Self {
             tx_block_broadcast: tx_block_broadcast.clone(),
             new_round_sender,
             quorum_update_sender,
+            last_quorum_update,
         };
 
         let receivers = CoreSignalsReceivers {
@@ -543,8 +531,15 @@ impl CoreSignals {
         round: Round,
         leaders: Vec<Option<Slot>>,
     ) -> ConsensusResult<()> {
+        // Some small caching logic to avoid unnecessary resend of same information. If the exact same
+        // quorum update is attempted to be sent, then just return.
+        let update = QuorumUpdate { round, leaders };
+        if self.last_quorum_update.eq(&update) {
+            return Ok(());
+        }
+        self.last_quorum_update = update.clone();
         self.quorum_update_sender
-            .send(QuorumUpdate { round, leaders })
+            .send(update)
             .map_err(|_err| ConsensusError::Shutdown)?;
         Ok(())
     }
@@ -1053,9 +1048,19 @@ mod test {
 
         // Try to create the blocks for round 4 by calling the try_new_block method. No block should be created as the
         // leader - authority 3 - hasn't proposed any block.
-        for (core, _, _, _, _) in cores.iter_mut() {
+        for (core, signal_receivers, _, _, _) in cores.iter_mut() {
             core.add_blocks(last_round_blocks.clone()).unwrap();
             assert!(core.try_propose(false).unwrap().is_none());
+
+            // The quorum update signal should be emitted for the last quorum round (3) with all
+            // the leaders missing.
+            let quorum_update = signal_receivers
+                .quorum_update_receiver()
+                .borrow_and_update()
+                .clone();
+            assert_eq!(quorum_update.round, 3);
+            assert_eq!(quorum_update.leaders.len(), 1);
+            assert!(quorum_update.leaders.iter().all(Option::is_none));
         }
 
         // Now try to create the blocks for round 4 via the leader timeout method which should ignore any leader checks
@@ -1106,9 +1111,8 @@ mod test {
                     .quorum_update_receiver()
                     .borrow_and_update()
                     .clone();
-                assert_eq!(quorum_update.round, round - 1);
-                assert_eq!(quorum_update.leaders.len(), 1);
-                assert!(quorum_update.leaders.iter().all(Option::is_some));
+                assert_eq!(quorum_update.round, 0);
+                assert!(quorum_update.leaders.is_empty());
 
                 // append the new block to this round blocks
                 this_round_blocks.push(core.last_proposed_block().clone());

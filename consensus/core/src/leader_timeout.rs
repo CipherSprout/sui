@@ -116,7 +116,7 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
                         }
                         Ordering::Equal => {
                             // if we have already timed out and keep receiving updates for the same
-                            // round Nothing changed on the updated leaders, so just continue
+                            // round or nothing changed on the updated leaders, just continue
                             if leader_round_timed_out || update.leaders.eq(&last_quorum_update.leaders) {
                                 continue;
                             }
@@ -188,11 +188,12 @@ mod tests {
     use async_trait::async_trait;
     use consensus_config::{AuthorityIndex, Parameters};
     use parking_lot::Mutex;
+    use tokio::sync::watch;
     use tokio::time::{sleep, Instant};
 
     use crate::block::{BlockRef, Round, Slot, VerifiedBlock};
     use crate::context::Context;
-    use crate::core::{CoreSignals, DEFAULT_NUM_LEADERS_PER_ROUND};
+    use crate::core::{CoreSignals, QuorumUpdate, DEFAULT_NUM_LEADERS_PER_ROUND};
     use crate::core_thread::{CoreError, CoreThreadDispatcher};
     use crate::leader_timeout::{LeaderTimeoutTask, DEFAULT_LEADER_TIMEOUT_WEIGHTS};
 
@@ -397,5 +398,60 @@ mod tests {
         let (round, timestamp) = all_calls[0];
         assert_eq!(round, 13);
         assert!(timestamp - now < Duration::from_millis(250));
+    }
+
+    #[test]
+    fn leader_timeout_calculation() {
+        let dispatcher = Arc::new(MockCoreThreadDispatcher::default());
+        let (_quorum_update_sender, quorum_update_receiver) =
+            watch::channel(QuorumUpdate::default());
+        let (_stop_sender, stop) = tokio::sync::oneshot::channel();
+
+        // For 3 leaders
+        let leader_timeout_weights = [50, 40, 10];
+
+        let task = LeaderTimeoutTask {
+            dispatcher,
+            quorum_update_receiver,
+            stop,
+            leader_timeout: Duration::from_millis(500),
+            leader_timeout_weights,
+        };
+
+        // WHEN all are None
+        let leaders = [None, None, None];
+        let timeout = task.calculate_leader_timeout(&leaders);
+
+        assert_eq!(timeout, Duration::from_millis(500));
+
+        // WHEN third leader is Some
+        let leaders = [
+            None,
+            None,
+            Some(Slot::new(5, AuthorityIndex::new_for_test(2))),
+        ];
+        let timeout = task.calculate_leader_timeout(&leaders);
+
+        assert_eq!(timeout, Duration::from_millis(500));
+
+        // WHEN second & third leader is Some
+        let leaders = [
+            None,
+            Some(Slot::new(5, AuthorityIndex::new_for_test(1))),
+            Some(Slot::new(5, AuthorityIndex::new_for_test(2))),
+        ];
+        let timeout = task.calculate_leader_timeout(&leaders);
+
+        assert_eq!(timeout, Duration::from_millis(500));
+
+        // WHEN first & second leader is Some
+        let leaders = [
+            Some(Slot::new(5, AuthorityIndex::new_for_test(0))),
+            Some(Slot::new(5, AuthorityIndex::new_for_test(1))),
+            None,
+        ];
+        let timeout = task.calculate_leader_timeout(&leaders);
+
+        assert_eq!(timeout, Duration::from_millis(50));
     }
 }
