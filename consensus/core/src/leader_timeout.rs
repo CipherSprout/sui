@@ -255,7 +255,10 @@ mod tests {
 
         // send a signal that a new round has been produced.
         signals
-            .quorum_update(9, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(QuorumUpdate::new(
+                9,
+                vec![None; DEFAULT_NUM_LEADERS_PER_ROUND],
+            ))
             .ok();
 
         // wait enough until a force_new_block has been received
@@ -305,15 +308,24 @@ mod tests {
         // now send some signals with some small delay between them, but not enough so every round
         // manages to timeout and call the force new block method.
         signals
-            .quorum_update(12, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(QuorumUpdate::new(
+                12,
+                vec![None; DEFAULT_NUM_LEADERS_PER_ROUND],
+            ))
             .ok();
         sleep(leader_timeout / 2).await;
         signals
-            .quorum_update(13, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(QuorumUpdate::new(
+                13,
+                vec![None; DEFAULT_NUM_LEADERS_PER_ROUND],
+            ))
             .ok();
         sleep(leader_timeout / 2).await;
         signals
-            .quorum_update(14, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(QuorumUpdate::new(
+                14,
+                vec![None; DEFAULT_NUM_LEADERS_PER_ROUND],
+            ))
             .ok();
         sleep(2 * leader_timeout).await;
 
@@ -353,7 +365,7 @@ mod tests {
         // Send a quorum update for round 12 and without leaders found. This will reset the timer and
         // adjust in order to timeout with maximum default value - 500ms
         signals
-            .quorum_update(12, vec![None; NUM_OF_LEADERS_PER_ROUND])
+            .quorum_update(QuorumUpdate::new(12, vec![None; NUM_OF_LEADERS_PER_ROUND]))
             .ok();
         sleep(Duration::from_millis(100)).await;
 
@@ -361,14 +373,14 @@ mod tests {
         // expected leader timeout as we still miss a more important leader on the left - the one from first position.
         // So we want to wait for the leader of position one before we adjust the timer.
         signals
-            .quorum_update(
+            .quorum_update(QuorumUpdate::new(
                 12,
                 vec![
                     None,
                     Some(Slot::new(12, AuthorityIndex::new_for_test(2))),
                     None,
                 ],
-            )
+            ))
             .ok();
         sleep(Duration::from_millis(100)).await;
 
@@ -380,14 +392,14 @@ mod tests {
         // The timeout should be reset to ensure that for the round 12 we will (or have already) waited at most 150ms
         // before attempting for produce a new block.
         signals
-            .quorum_update(
+            .quorum_update(QuorumUpdate::new(
                 12,
                 vec![
                     Some(Slot::new(12, AuthorityIndex::new_for_test(3))),
                     Some(Slot::new(12, AuthorityIndex::new_for_test(2))),
                     None,
                 ],
-            )
+            ))
             .ok();
 
         // Give a little bit of time to make sure that the new block call has run

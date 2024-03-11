@@ -148,16 +148,13 @@ impl Core {
             return Ok(missing_blocks);
         }
 
-        // Now add accepted blocks to the threshold clock and pending ancestors list.
+        // Now add accepted blocks to the threshold clock and emit any necessary signals
         self.add_accepted_blocks(&accepted_blocks)?;
 
         self.try_commit()?;
 
         // Try to propose now since there are new blocks accepted.
         self.try_propose(false)?;
-
-        // Notify about any updates on the last quorum
-        self.notify_quorum_updates()?;
 
         Ok(missing_blocks)
     }
@@ -199,12 +196,9 @@ impl Core {
         Ok(())
     }
 
-    /// The method will emit a signal update on the latest formed quorum when a new leader for that
-    /// round has been accepted. That will be done so only if we haven't already proposed for the round
-    /// after the last quorum.
+    /// The method will emit a signal update on the latest formed quorum. The signal will be emitted
+    /// until we propose for the round after the last quorum and only the quorum round is a leader round.
     fn notify_quorum_updates(&mut self) -> ConsensusResult<()> {
-        // Look into the accepted blocks for the leaders for the last quorum round. Even if one is found
-        // then just take the snapshot of found leaders and emit the signal
         let current_round = self.threshold_clock.get_round();
         let quorum_round = current_round.saturating_sub(1);
 
@@ -219,6 +213,7 @@ impl Core {
             return Ok(());
         }
 
+        // Just take a snapshot of the leaders (found & non-found) and forward them
         let mut accepted_leaders = vec![None; self.num_of_leaders.get()];
         let dag_state = self.dag_state.read();
         for (i, leader) in leaders.into_iter().enumerate() {
@@ -227,9 +222,10 @@ impl Core {
             }
         }
 
-        // emit the signal
+        // Emit the signal. As the `signals` is caching the latest value we are deduping from sending
+        // the exact same values multiple times.
         self.signals
-            .quorum_update(quorum_round, accepted_leaders)
+            .quorum_update(QuorumUpdate::new(quorum_round, accepted_leaders))
             .tap_err(|err| warn!("Could not notify subscribers for leader updates: {err}"))?;
 
         Ok(())
@@ -246,10 +242,24 @@ impl Core {
             if self.context.committee.size() > 1 {
                 self.signals.new_block(block.clone())?;
             }
+
+            // Since the block has been created, just accept it internally in Core
+            self.add_accepted_blocks(&[block.clone()])?;
+
             // The new block may help commit.
             self.try_commit()?;
+
+            // Notify about any updates on the last quorum. It is important to trigger this here as
+            // the newly created block might have formed a new quorum on the next round.
+            self.notify_quorum_updates()?;
+
             return Ok(Some(block));
         }
+
+        // Notify about any updates on the last quorum. Even if a block is not created, we might still
+        // have updates to emit.
+        self.notify_quorum_updates()?;
+
         Ok(None)
     }
 
@@ -307,13 +317,10 @@ impl Core {
         assert_eq!(accepted_blocks.len(), 1);
         assert!(missing.is_empty());
 
-        // 5. Accept the block in core to advance threshold clock etc
-        self.add_accepted_blocks(&accepted_blocks)?;
-
-        // 6. Ensure the new block and its ancestors are persisted, before broadcasting it.
+        // 5. Ensure the new block and its ancestors are persisted, before broadcasting it.
         self.dag_state.write().flush();
 
-        // 7. Update internal state.
+        // 6. Update internal state.
         self.last_proposed_block = verified_block.clone();
 
         tracing::info!("Created block {}", verified_block);
@@ -464,9 +471,19 @@ impl Core {
 }
 
 #[derive(Clone, Default, Eq, PartialEq)]
-pub struct QuorumUpdate {
+pub(crate) struct QuorumUpdate {
+    // The corresponding quorum round
     pub round: Round,
+    // The array contains the leaders in the order of evaluation with the
+    // most left position being the leader with the highest priority. For each position a `Some` value
+    // represents that the leader of the position has been found.
     pub leaders: Vec<Option<Slot>>,
+}
+
+impl QuorumUpdate {
+    pub(crate) fn new(round: Round, leaders: Vec<Option<Slot>>) -> Self {
+        Self { round, leaders }
+    }
 }
 
 /// Senders of signals from Core, for outputs and events (ex new block produced).
@@ -521,19 +538,10 @@ impl CoreSignals {
         let _ = self.new_round_sender.send_replace(round);
     }
 
-    /// Sends a signal with updates on the last quorum round `round`. The signal is emitted only
-    /// when a quorum has been reached for that round. At the moment an array with the leader slots is
-    /// sent. The whole array of leaders is sent every time. The array contains the leaders in the order of evaluation with the
-    /// most left position being the leader with the highest priority. For each position a `Some` value
-    /// represents that the leader of the position has been found.
-    pub fn quorum_update(
-        &mut self,
-        round: Round,
-        leaders: Vec<Option<Slot>>,
-    ) -> ConsensusResult<()> {
-        // Some small caching logic to avoid unnecessary resend of same information. If the exact same
-        // quorum update is attempted to be sent, then just return.
-        let update = QuorumUpdate { round, leaders };
+    /// Sends a signal with updates on the last quorum. Some small caching logic is included to avoid unnecessary
+    /// resend of same information. If the exact same quorum update is attempted to be sent, then the method
+    /// just returns.
+    pub fn quorum_update(&mut self, update: QuorumUpdate) -> ConsensusResult<()> {
         if self.last_quorum_update.eq(&update) {
             return Ok(());
         }
