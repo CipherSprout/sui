@@ -115,8 +115,9 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
                             continue;
                         }
                         Ordering::Equal => {
-                            // Nothing changed on the updated leaders, so just continue
-                            if update.leaders.eq(&last_quorum_update.leaders) {
+                            // if we have already timed out and keep receiving updates for the same
+                            // round Nothing changed on the updated leaders, so just continue
+                            if leader_round_timed_out || update.leaders.eq(&last_quorum_update.leaders) {
                                 continue;
                             }
 

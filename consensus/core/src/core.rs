@@ -179,16 +179,19 @@ impl Core {
     /// pending ancestors list.
     fn add_accepted_blocks(&mut self, accepted_blocks: &[VerifiedBlock]) -> ConsensusResult<()> {
         // Advance the threshold clock. If advanced to a new round then send a signal that a new quorum has been received.
-        if let Some(new_round) = self
+        let new_quorum = if let Some(new_round) = self
             .threshold_clock
             .add_blocks(accepted_blocks.iter().map(|b| b.reference()).collect())
         {
             // notify that threshold clock advanced to new round
             self.signals.new_round(new_round);
-        }
+            true
+        } else {
+            false
+        };
 
         // Notify about any updates on the last quorum
-        self.notify_quorum_updates(accepted_blocks)?;
+        self.notify_quorum_updates(accepted_blocks, new_quorum)?;
 
         // Report the threshold clock round
         self.context
@@ -199,30 +202,35 @@ impl Core {
         Ok(())
     }
 
-    fn notify_quorum_updates(&mut self, accepted_blocks: &[VerifiedBlock]) -> ConsensusResult<()> {
+    /// The method will emit a signal update on the latest formed quorum when a new leader for that
+    /// round has been accepted. Also, if `force` is true, then the method will simply emit a signal
+    /// irrespective of the leaders change status.
+    fn notify_quorum_updates(
+        &mut self,
+        accepted_blocks: &[VerifiedBlock],
+        ignore_leader_checks: bool,
+    ) -> ConsensusResult<()> {
         // Look into the accepted blocks for the leaders for the last quorum round. Even if one is found
         // then just take the snapshot of found leaders and emit the signal
         let current_round = self.threshold_clock.get_round();
         let quorum_round = current_round.saturating_sub(1);
 
-        // No reason to send any updates if we already proposed after the last available quorum and
-        // still the next quorum has not been formed.
-        if self.last_proposed_round() == current_round {
-            return Ok(());
-        }
-
-        // No reason to send any updates if none of the accepted blocks refer to the last quorum round
-        if !accepted_blocks
-            .iter()
-            .any(|block| block.round() == quorum_round)
-        {
-            return Ok(());
-        }
-
-        let leaders = self.leaders(quorum_round);
-
         // Do not attempt to give any update if is not a leader round
+        let leaders = self.leaders(quorum_round);
         if leaders.is_empty() {
+            return Ok(());
+        }
+
+        // No reason to send any updates if none of the accepted blocks is a leader of the last quorum
+        // or not directed to ignore the leader checks.
+        if !ignore_leader_checks
+            && !accepted_blocks.iter().any(|block| {
+                leaders
+                    .iter()
+                    .find(|leader| *leader == block.into())
+                    .is_some()
+            })
+        {
             return Ok(());
         }
 
