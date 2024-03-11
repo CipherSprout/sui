@@ -1,9 +1,10 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
-use crate::block::{Round, Slot};
+use crate::block::GENESIS_ROUND;
 use crate::context::Context;
-use crate::core::{CoreSignalsReceivers, DEFAULT_NUM_LEADERS_PER_ROUND};
+use crate::core::{CoreSignalsReceivers, QuorumUpdate, DEFAULT_NUM_LEADERS_PER_ROUND};
 use crate::core_thread::CoreThreadDispatcher;
+use std::cmp::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot::{Receiver, Sender};
@@ -43,7 +44,7 @@ pub(crate) struct LeaderTimeoutTask<
     const NUM_OF_LEADERS: usize = DEFAULT_NUM_LEADERS_PER_ROUND,
 > {
     dispatcher: Arc<D>,
-    leader_update_receiver: watch::Receiver<(Round, Vec<Option<Slot>>)>,
+    quorum_update_receiver: watch::Receiver<QuorumUpdate>,
     stop: Receiver<()>,
     leader_timeout: Duration,
     leader_timeout_weights: [u32; NUM_OF_LEADERS],
@@ -62,7 +63,7 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
         let mut me = Self {
             dispatcher,
             stop,
-            leader_update_receiver: signals_receivers.leader_update_receiver(),
+            quorum_update_receiver: signals_receivers.quorum_update_receiver(),
             leader_timeout: context.parameters.leader_timeout,
             leader_timeout_weights,
         };
@@ -76,8 +77,9 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
 
     async fn run(&mut self) {
         let _ = self.leader_timeout_weights;
-        let leader_update = &mut self.leader_update_receiver;
-        let (mut leader_round, _) = leader_update.borrow_and_update().clone();
+        let quorum_update = &mut self.quorum_update_receiver;
+        let mut last_quorum_update: QuorumUpdate = quorum_update.borrow_and_update().clone();
+
         let mut leader_round_timed_out = false;
         let timer_start = Instant::now();
         let leader_timeout = sleep_until(timer_start + self.leader_timeout);
@@ -87,10 +89,10 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
         loop {
             tokio::select! {
                 // when leader timer expires then we attempt to trigger the creation of a new block.
-                // If we already timed out before then the branch gets disabled so we don't attempt
+                // If we already timed out before then the branch gets disabled, so we don't attempt
                 // all the time to produce already produced blocks for that round.
                 () = &mut leader_timeout, if !leader_round_timed_out => {
-                    if let Err(err) = self.dispatcher.force_new_block(leader_round.saturating_add(1)).await {
+                    if let Err(err) = self.dispatcher.force_new_block(last_quorum_update.round.saturating_add(1)).await {
                         warn!("Error received while calling dispatcher, probably dispatcher is shutting down, will now exit: {err:?}");
                         return;
                     }
@@ -98,18 +100,34 @@ impl<D: CoreThreadDispatcher, const NUM_OF_LEADERS: usize> LeaderTimeoutTask<D, 
                 }
 
                 // Either a new quorum round has been produced or new leaders have been accepted. Reset the leader timeout.
-                Ok(_) = leader_update.changed() => {
-                    let (round, leaders) = leader_update.borrow_and_update().clone();
-                    assert_eq!(leaders.len(), NUM_OF_LEADERS, "Number of expected leaders differ from the leader timeout weight setup");
+                Ok(_) = quorum_update.changed() => {
+                    let update: QuorumUpdate = quorum_update.borrow_and_update().clone();
 
-                    leader_round = round;
-                    debug!("New round has been received {leader_round}, resetting timer");
+                    assert!(update.round > GENESIS_ROUND, "Unexpected receive of update for genesis round!");
+                    assert_eq!(update.leaders.len(), NUM_OF_LEADERS, "Number of expected leaders differ from the leader timeout weight setup");
 
-                    leader_round_timed_out = false;
+                    match update.round.cmp(&last_quorum_update.round) {
+                        Ordering::Less => {
+                            warn!("Received leader update for lower quorum round {} compared to previous round {}, will ignore", update.round, last_quorum_update.round);
+                            continue;
+                        }
+                        Ordering::Equal => {
+                            // Update the leader timeout
+                        }
+                        Ordering::Greater => {
+                            //1. Now reset the timer.
+                            debug!("New round has been received {}, resetting timer", update.round);
+                            last_quorum_update = update;
 
-                    leader_timeout
-                    .as_mut()
-                    .reset(Instant::now() + self.leader_timeout);
+                            leader_round_timed_out = false;
+
+                            leader_timeout
+                            .as_mut()
+                            .reset(Instant::now() + self.leader_timeout);
+
+                            //2. Update the leader timeout
+                        }
+                    }
                 },
                 _ = &mut self.stop => {
                     debug!("Stop signal has been received, now shutting down");
@@ -131,7 +149,6 @@ fn assert_timeout_weights(weights: &[u32]) {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::num::NonZeroUsize;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -185,7 +202,6 @@ mod tests {
         let (context, _signers) = Context::new_for_test(4);
         let dispatcher = Arc::new(MockCoreThreadDispatcher::default());
         let leader_timeout = Duration::from_millis(500);
-        let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
         let parameters = Parameters {
             leader_timeout,
             ..Default::default()
@@ -193,7 +209,7 @@ mod tests {
         let context = Arc::new(context.with_parameters(parameters));
         let start = Instant::now();
 
-        let (mut signals, signal_receivers) = CoreSignals::new(num_of_leaders);
+        let (mut signals, signal_receivers) = CoreSignals::new();
 
         // spawn the task
         let _handle = LeaderTimeoutTask::start(
@@ -205,7 +221,7 @@ mod tests {
 
         // send a signal that a new round has been produced.
         signals
-            .leader_update(9, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(9, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
             .ok();
 
         // wait enough until a force_new_block has been received
@@ -239,11 +255,10 @@ mod tests {
             leader_timeout,
             ..Default::default()
         };
-        let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
         let context = Arc::new(context.with_parameters(parameters));
         let now = Instant::now();
 
-        let (mut signals, signal_receivers) = CoreSignals::new(num_of_leaders);
+        let (mut signals, signal_receivers) = CoreSignals::new();
 
         // spawn the task
         let _handle = LeaderTimeoutTask::start(
@@ -256,15 +271,15 @@ mod tests {
         // now send some signals with some small delay between them, but not enough so every round
         // manages to timeout and call the force new block method.
         signals
-            .leader_update(12, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(12, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
             .ok();
         sleep(leader_timeout / 2).await;
         signals
-            .leader_update(13, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(13, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
             .ok();
         sleep(leader_timeout / 2).await;
         signals
-            .leader_update(14, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
+            .quorum_update(14, vec![None; DEFAULT_NUM_LEADERS_PER_ROUND])
             .ok();
         sleep(2 * leader_timeout).await;
 

@@ -151,7 +151,6 @@ impl Broadcaster {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroUsize;
     use std::{collections::BTreeMap, time::Duration};
 
     use async_trait::async_trait;
@@ -160,7 +159,6 @@ mod test {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::core::DEFAULT_NUM_LEADERS_PER_ROUND;
     use crate::{
         block::{BlockRef, TestBlock},
         core::CoreSignals,
@@ -209,8 +207,7 @@ mod test {
         let (context, _keys) = Context::new_for_test(4);
         let context = Arc::new(context);
         let network_client = Arc::new(FakeNetworkClient::new());
-        let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
-        let (core_signals, signals_receiver) = CoreSignals::new(num_of_leaders);
+        let (core_signals, signals_receiver) = CoreSignals::new();
         let _broadcaster =
             Broadcaster::new(context.clone(), network_client.clone(), &signals_receiver);
 

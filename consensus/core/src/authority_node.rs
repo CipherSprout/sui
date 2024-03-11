@@ -125,7 +125,7 @@ where
 
         // TODO: move the num of leaders to protocol config.
         let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
-        let (core_signals, signals_receivers) = CoreSignals::new(num_of_leaders);
+        let (core_signals, signals_receivers) = CoreSignals::new();
 
         let network_manager = N::new(context.clone());
         let network_client = network_manager.client();

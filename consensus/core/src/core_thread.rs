@@ -209,7 +209,7 @@ mod test {
         let (_transaction_client, tx_receiver) = TransactionClient::new(context.clone());
         let transaction_consumer = TransactionConsumer::new(tx_receiver, context.clone(), None);
         let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
-        let (signals, signal_receivers) = CoreSignals::new(num_of_leaders);
+        let (signals, signal_receivers) = CoreSignals::new();
         let _block_receiver = signal_receivers.block_broadcast_receiver();
 
         let (sender, _receiver) = unbounded_channel();
