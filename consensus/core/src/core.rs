@@ -203,7 +203,7 @@ impl Core {
     }
 
     /// The method will emit a signal update on the latest formed quorum when a new leader for that
-    /// round has been accepted. Also, if `force` is true, then the method will simply emit a signal
+    /// round has been accepted. Also, if `ignore_leader_checks` is true, then the method will simply emit a signal
     /// irrespective of the leaders change status.
     fn notify_quorum_updates(
         &mut self,
