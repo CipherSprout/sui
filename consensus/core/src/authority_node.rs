@@ -1,6 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::num::NonZeroUsize;
 use std::{sync::Arc, time::Duration, time::Instant, vec};
 
 use async_trait::async_trait;
@@ -12,6 +13,8 @@ use sui_protocol_config::ProtocolConfig;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
+use crate::core::DEFAULT_NUM_LEADERS_PER_ROUND;
+use crate::leader_timeout::DEFAULT_LEADER_TIMEOUT_WEIGHTS;
 use crate::{
     block::{timestamp_utc_ms, BlockAPI, BlockRef, SignedBlock, VerifiedBlock},
     block_manager::BlockManager,
@@ -120,6 +123,8 @@ where
         let (tx_client, tx_receiver) = TransactionClient::new(context.clone());
         let tx_consumer = TransactionConsumer::new(tx_receiver, context.clone(), None);
 
+        // TODO: move the num of leaders to protocol config.
+        let num_of_leaders = NonZeroUsize::new(DEFAULT_NUM_LEADERS_PER_ROUND).unwrap();
         let (core_signals, signals_receivers) = CoreSignals::new();
 
         let network_manager = N::new(context.clone());
@@ -129,6 +134,7 @@ where
         let broadcaster =
             Broadcaster::new(context.clone(), network_client.clone(), &signals_receivers);
 
+        // Construct Core components.
         let store = Arc::new(RocksDBStore::new(&context.parameters.db_path_str_unsafe()));
         let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
 
@@ -156,13 +162,18 @@ where
             core_signals,
             protocol_keypair,
             dag_state.clone(),
+            num_of_leaders,
         );
 
         let (core_dispatcher, core_thread_handle) =
             ChannelCoreThreadDispatcher::start(core, context.clone());
         let core_dispatcher = Arc::new(core_dispatcher);
-        let leader_timeout_handle =
-            LeaderTimeoutTask::start(core_dispatcher.clone(), &signals_receivers, context.clone());
+        let leader_timeout_handle = LeaderTimeoutTask::start(
+            core_dispatcher.clone(),
+            &signals_receivers,
+            context.clone(),
+            DEFAULT_LEADER_TIMEOUT_WEIGHTS,
+        );
 
         let synchronizer = Synchronizer::start(
             network_client,
