@@ -149,7 +149,6 @@ mod tests {
         let dag_state = Arc::new(RwLock::new(DagState::new(
             context.clone(),
             Arc::new(MemStore::new()),
-            None,
         )));
         let mut linearizer = Linearizer::new(dag_state.clone());
         let leader_schedule = LeaderSchedule::new(context.clone());
@@ -201,7 +200,6 @@ mod tests {
         let dag_state = Arc::new(RwLock::new(DagState::new(
             context.clone(),
             Arc::new(MemStore::new()),
-            None,
         )));
         let leader_schedule = LeaderSchedule::new(context.clone());
         let mut linearizer = Linearizer::new(dag_state.clone());

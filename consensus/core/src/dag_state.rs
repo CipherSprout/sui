@@ -21,10 +21,6 @@ use crate::{
     storage::Store,
 };
 
-/// Rounds of recently committed blocks cached in memory, per authority.
-#[allow(unused)]
-const DEFAULT_CACHED_ROUNDS: Round = 100;
-
 /// DagState provides the API to write and read accepted blocks from the DAG.
 /// Only uncommited and last committed blocks are cached in memory.
 /// The rest of blocks are stored on disk.
@@ -68,12 +64,10 @@ pub(crate) struct DagState {
 
 impl DagState {
     /// Initializes DagState from storage.
-    pub(crate) fn new(
-        context: Arc<Context>,
-        store: Arc<dyn Store>,
-        cached_rounds: Option<Round>,
-    ) -> Self {
-        let cached_rounds = cached_rounds.unwrap_or(DEFAULT_CACHED_ROUNDS);
+    pub(crate) fn new(context: Arc<Context>, store: Arc<dyn Store>) -> Self {
+        let cached_rounds = context.parameters.dag_state_cached_rounds as Round;
+        assert!(cached_rounds >= 50, "To ensure node efficiency and ability for the protocol to work, cache size should be at least 50 rounds");
+
         let num_authorities = context.committee.size();
 
         let genesis = genesis_blocks(context.clone())
@@ -347,7 +341,7 @@ impl DagState {
 
             let last_evicted_round = self.authority_evict_round(authority_index);
             if before_round <= last_evicted_round {
-                panic!("Attempted to request for blocks of rounds <= {before_round}, that is bellow the last evicted round {last_evicted_round} for authority {authority_index}", );
+                panic!("Attempted to request for blocks of rounds <= {before_round}, that is below the last evicted round {last_evicted_round} for authority {authority_index}", );
             }
 
             if let Some(block_ref) = block_refs
@@ -548,7 +542,7 @@ impl DagState {
             }
             let mut quorum = StakeAggregator::<QuorumThreshold>::new();
 
-            // Since that the minimum wave length is 3 we expect to find a quorum in the uncommitted rounds.
+            // Since the minimum wave length is 3 we expect to find a quorum in the uncommitted rounds.
             let blocks = self.get_uncommitted_blocks_at_round(round);
             for block in &blocks {
                 if quorum.add(block.author(), &self.context.committee) {
@@ -604,7 +598,7 @@ mod test {
         let (context, _) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let mut dag_state = DagState::new(context.clone(), store.clone(), None);
+        let mut dag_state = DagState::new(context.clone(), store.clone());
         let own_index = AuthorityIndex::new_for_test(0);
 
         // Populate test blocks for round 1 ~ 10, authorities 0 ~ 2.
@@ -711,7 +705,7 @@ mod test {
         let (context, _) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let mut dag_state = DagState::new(context.clone(), store.clone(), None);
+        let mut dag_state = DagState::new(context.clone(), store.clone());
 
         // Populate DagState.
 
@@ -867,10 +861,12 @@ mod test {
         /// Only keep elements up to 2 rounds before the last committed round
         const CACHED_ROUNDS: Round = 2;
 
-        let (context, _) = Context::new_for_test(4);
+        let (mut context, _) = Context::new_for_test(4);
+        context.parameters.dag_state_cached_rounds = CACHED_ROUNDS;
+
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let mut dag_state = DagState::new(context.clone(), store.clone(), Some(CACHED_ROUNDS));
+        let mut dag_state = DagState::new(context.clone(), store.clone());
 
         // Create test blocks for round 1 ~ 10
         let num_rounds: u32 = 10;
@@ -929,7 +925,7 @@ mod test {
         let (context, _) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let mut dag_state = DagState::new(context.clone(), store.clone(), None);
+        let mut dag_state = DagState::new(context.clone(), store.clone());
 
         // Create test blocks for round 1 ~ 10
         let num_rounds: u32 = 10;
@@ -986,7 +982,7 @@ mod test {
         let (context, _) = Context::new_for_test(num_authorities as usize);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let mut dag_state = DagState::new(context.clone(), store.clone(), None);
+        let mut dag_state = DagState::new(context.clone(), store.clone());
 
         // Create test blocks and commits for round 1 ~ 10
         let num_rounds: u32 = 10;
@@ -1046,7 +1042,7 @@ mod test {
         drop(dag_state);
 
         // Recover the state from the store
-        let dag_state = DagState::new(context.clone(), store.clone(), None);
+        let dag_state = DagState::new(context.clone(), store.clone());
 
         // Blocks of first 5 rounds should be found in DagState.
         let block_refs = blocks
@@ -1080,10 +1076,12 @@ mod test {
     fn test_get_cached_last_block_per_authority() {
         // GIVEN
         const CACHED_ROUNDS: Round = 2;
-        let (context, _) = Context::new_for_test(4);
+        let (mut context, _) = Context::new_for_test(4);
+        context.parameters.dag_state_cached_rounds = CACHED_ROUNDS;
+
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let mut dag_state = DagState::new(context.clone(), store.clone(), Some(CACHED_ROUNDS));
+        let mut dag_state = DagState::new(context.clone(), store.clone());
 
         // Create no blocks for authority 0
         // Create one block (round 1) for authority 1
@@ -1134,15 +1132,17 @@ mod test {
 
     #[test]
     #[should_panic(
-        expected = "Attempted to request for blocks of rounds <= 1, that is bellow the last evicted round 1 for authority D"
+        expected = "Attempted to request for blocks of rounds <= 1, that is below the last evicted round 1 for authority D"
     )]
     fn test_get_cached_last_block_per_authority_requesting_out_of_round_range() {
         // GIVEN
         const CACHED_ROUNDS: Round = 1;
-        let (context, _) = Context::new_for_test(4);
+        let (mut context, _) = Context::new_for_test(4);
+        context.parameters.dag_state_cached_rounds = CACHED_ROUNDS;
+
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let mut dag_state = DagState::new(context.clone(), store.clone(), Some(CACHED_ROUNDS));
+        let mut dag_state = DagState::new(context.clone(), store.clone());
 
         // Create no blocks for authority 0
         // Create one block (round 1) for authority 1
@@ -1181,11 +1181,7 @@ mod test {
         let (context, _) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(
-            context.clone(),
-            store.clone(),
-            None,
-        )));
+        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
 
         // WHEN no blocks exist then genesis should be returned
         {
@@ -1228,11 +1224,7 @@ mod test {
         let (context, _) = Context::new_for_test(4);
         let context = Arc::new(context);
         let store = Arc::new(MemStore::new());
-        let dag_state = Arc::new(RwLock::new(DagState::new(
-            context.clone(),
-            store.clone(),
-            None,
-        )));
+        let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
 
         // WHEN no blocks exist then genesis should be returned
         {

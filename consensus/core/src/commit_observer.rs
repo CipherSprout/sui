@@ -188,7 +188,6 @@ mod tests {
         let dag_state = Arc::new(RwLock::new(DagState::new(
             context.clone(),
             mem_store.clone(),
-            None,
         )));
         let leader_schedule = LeaderSchedule::new(context.clone());
         let last_processed_index = 0;
@@ -275,7 +274,6 @@ mod tests {
         let dag_state = Arc::new(RwLock::new(DagState::new(
             context.clone(),
             mem_store.clone(),
-            None,
         )));
         let leader_schedule = LeaderSchedule::new(context.clone());
         let last_processed_index = 0;
@@ -404,7 +402,6 @@ mod tests {
         let dag_state = Arc::new(RwLock::new(DagState::new(
             context.clone(),
             mem_store.clone(),
-            None,
         )));
         let leader_schedule = LeaderSchedule::new(context.clone());
         let last_processed_index = 0;
