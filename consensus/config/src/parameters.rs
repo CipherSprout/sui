@@ -16,6 +16,7 @@ pub struct Parameters {
     /// The number of rounds of blocks to be kept in the Dag state cache per authority. The larger
     /// the number the more the blocks that will be kept in memory allowing minimising any potential
     /// disk access. Should be careful when tuning this parameter as it could be quite memory expensive.
+    /// Value should be at minimum 50 rounds to ensure node performance and protocol advance.
     #[serde(default = "Parameters::default_dag_state_cached_rounds")]
     pub dag_state_cached_rounds: u32,
 

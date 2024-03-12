@@ -66,8 +66,6 @@ impl DagState {
     /// Initializes DagState from storage.
     pub(crate) fn new(context: Arc<Context>, store: Arc<dyn Store>) -> Self {
         let cached_rounds = context.parameters.dag_state_cached_rounds as Round;
-        assert!(cached_rounds >= 50, "To ensure node efficiency and ability for the protocol to work, cache size should be at least 50 rounds");
-
         let num_authorities = context.committee.size();
 
         let genesis = genesis_blocks(context.clone())
@@ -341,7 +339,7 @@ impl DagState {
 
             let last_evicted_round = self.authority_evict_round(authority_index);
             if before_round <= last_evicted_round {
-                panic!("Attempted to request for blocks of rounds <= {before_round}, that is below the last evicted round {last_evicted_round} for authority {authority_index}", );
+                panic!("Attempted to request for blocks of rounds <= {before_round}, that is below or equal the last evicted round {last_evicted_round} for authority {authority_index}", );
             }
 
             if let Some(block_ref) = block_refs
@@ -577,7 +575,7 @@ impl DagState {
     /// Calculates the last eviction round based on the provided `commit_round`. Any blocks with
     /// round <= the evict round have been cleaned up.
     fn evict_round(commit_round: Round, cached_rounds: Round) -> Round {
-        commit_round.saturating_sub(cached_rounds).saturating_sub(1)
+        commit_round.saturating_sub(cached_rounds)
     }
 }
 
@@ -1106,6 +1104,20 @@ mod test {
         ));
 
         // WHEN search for the latest blocks
+        let before_round = 3;
+        let last_blocks = dag_state.get_last_cached_block_per_authority(Some(before_round));
+
+        // THEN
+        assert_eq!(last_blocks[0].round(), 0);
+        assert_eq!(last_blocks[1].round(), 1);
+        assert_eq!(last_blocks[2].round(), 2);
+        assert_eq!(last_blocks[3].round(), 3);
+
+        // WHEN we flush the DagState - after adding a commit with all the blocks, we expect this to trigger
+        // a clean up in the internal cache. That will keep the all the blocks with rounds >= authority_commit_round - CACHED_ROUND.
+        dag_state.flush();
+
+        // AND we request before round 2
         let before_round = 2;
         let last_blocks = dag_state.get_last_cached_block_per_authority(Some(before_round));
 
@@ -1114,25 +1126,11 @@ mod test {
         assert_eq!(last_blocks[1].round(), 1);
         assert_eq!(last_blocks[2].round(), 2);
         assert_eq!(last_blocks[3].round(), 2);
-
-        // WHEN we flush the DagState - after adding a commit with all the blocks, we expect this to trigger
-        // a clean up in the internal cache. That will keep the all the blocks with rounds >= authority_commit_round - CACHED_ROUND.
-        dag_state.flush();
-
-        // AND we request before round 1
-        let before_round = 1;
-        let last_blocks = dag_state.get_last_cached_block_per_authority(Some(before_round));
-
-        // THEN
-        assert_eq!(last_blocks[0].round(), 0);
-        assert_eq!(last_blocks[1].round(), 1);
-        assert_eq!(last_blocks[2].round(), 1);
-        assert_eq!(last_blocks[3].round(), 1);
     }
 
     #[test]
     #[should_panic(
-        expected = "Attempted to request for blocks of rounds <= 1, that is below the last evicted round 1 for authority D"
+        expected = "Attempted to request for blocks of rounds <= 1, that is below or equal the last evicted round 1 for authority C"
     )]
     fn test_get_cached_last_block_per_authority_requesting_out_of_round_range() {
         // GIVEN
