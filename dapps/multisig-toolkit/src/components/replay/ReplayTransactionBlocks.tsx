@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { PreviewCard } from '../preview-effects/PreviewCard';
-import { Argument, ReplayProgrammableTransactions } from './replay-types';
+import { Argument, ReplayProgrammableTransactions, TransactionResult } from './replay-types';
 import { ReplayInputArgument } from './ReplayInputArgument';
 import { ReplayLink } from './ReplayLink';
 
@@ -22,6 +22,7 @@ export function ReplayTransactionBlocks({
 			</PreviewCard.Root>
 		);
 	};
+
 	return (
 		<div>
 			{transactions.commands.map((command, index) => (
@@ -44,7 +45,6 @@ export function ReplayTransactionBlocks({
 							</div>
 						)}
 					</PreviewCard.Header>
-
 					<PreviewCard.Body>
 						<div className="max-h-[300px] overflow-y-auto grid grid-cols-1 gap-2">
 							{'MoveCall' in command &&
@@ -102,6 +102,7 @@ export function ReplayTransactionBlocks({
 						</div>
 					</PreviewCard.Body>
 				</PreviewCard.Root>
+
 			))}
 		</div>
 	);
