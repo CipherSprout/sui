@@ -1,14 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from 'react';
-import { darkStyles, JsonView } from 'react-json-view-lite';
-import { useLocation, useSearchParams } from 'react-router-dom';
-
-import 'react-json-view-lite/dist/index.css';
-
 import * as Tabs from '@radix-ui/react-tabs';
 import * as pako from 'pako';
+import { useEffect, useState } from 'react';
+import ReactJson from 'react-json-view';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { ReplayType } from '@/components/replay/replay-types';
 import { ReplayContext } from '@/components/replay/ReplayContext';
@@ -70,7 +67,15 @@ export function Replay() {
 		{
 			name: 'json',
 			title: 'Raw JSON',
-			component: () => <JsonView data={data as object} style={darkStyles} />,
+			component: () => (
+				<ReactJson
+					src={data as object}
+					displayDataTypes={false}
+					iconStyle="square"
+					theme="ocean"
+					style={{ padding: 10, borderRadius: 10 }}
+				/>
+			),
 		},
 	];
 
