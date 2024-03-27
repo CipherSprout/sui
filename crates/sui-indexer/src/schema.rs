@@ -314,6 +314,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    tx_digests (tx_digest) {
+        tx_digest -> Bytea,
+        cp_sequence_number -> Int8,
+        tx_sequence_number -> Int8,
+    }
+}
+
+diesel::table! {
     tx_input_objects (object_id, tx_sequence_number, cp_sequence_number) {
         cp_sequence_number -> Int8,
         tx_sequence_number -> Int8,
@@ -385,6 +393,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     tx_changed_objects,
     tx_changed_objects_partition_0,
     tx_count_metrics,
+    tx_digests,
     tx_input_objects,
     tx_input_objects_partition_0,
     tx_recipients,
