@@ -69,7 +69,7 @@ const PG_COMMIT_PARALLEL_CHUNK_SIZE: usize = 100;
 // The amount of rows to update in one DB transcation, for objects particularly
 // Having this number too high may cause many db deadlocks because of
 // optimistic locking.
-const PG_COMMIT_OBJECTS_PARALLEL_CHUNK_SIZE: usize = 1000;
+const PG_COMMIT_OBJECTS_PARALLEL_CHUNK_SIZE: usize = 500;
 
 // with rn = 1, we only select the latest version of each object,
 // so that we don't have to update the same object multiple times.
