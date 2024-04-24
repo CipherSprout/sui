@@ -20,12 +20,10 @@ const SUINS_REPO = `https://github.com/MystenLabs/suins-contracts.git`;
 const SUINS_REPO_BRANCH = `ml/easier-testing`;
 
 /**
- * Downloads the `suins contracts` repository, publishes the contracts
- * and does the setup.
- *
- * Returns the constants from the contracts.
- * */
-export async function cloneAndPublishSuinsContracts(toolbox: TestToolbox): Promise<Constants> {
+ * Creates a temp folder (only lives through a single test run)
+ * and clones the `suins-contracts` repository (contracts + scripts).
+ */
+export async function cloneSuinsContracts(): Promise<string> {
 	tmp.setGracefulCleanup();
 	const tmpobj = tmp.dirSync({ unsafeCleanup: true });
 
@@ -41,11 +39,22 @@ export async function cloneAndPublishSuinsContracts(toolbox: TestToolbox): Promi
 		depth: 1,
 	});
 
+	return tmpobj.name;
+}
+
+/**
+ * Publishes the contracts and does the initial setups needed.
+ * Returns the constants from the contracts.
+ * */
+export async function publishAndSetupSuinsContracts(
+	toolbox: TestToolbox,
+	contractsFolder: string,
+): Promise<Constants> {
 	// installs dependencies
-	execSync(`cd ${tmpobj.name}/scripts && pnpm i`);
+	execSync(`cd ${contractsFolder}/scripts && pnpm i`);
 
 	// publishes & sets-up the contracts on our localnet.
-	execSync(`cd ${tmpobj.name}/scripts && pnpm publish-and-setup`, {
+	execSync(`cd ${contractsFolder}/scripts && pnpm publish-and-setup`, {
 		env: {
 			...process.env,
 			PRIVATE_KEY: toolbox.keypair.getSecretKey(),
@@ -56,7 +65,7 @@ export async function cloneAndPublishSuinsContracts(toolbox: TestToolbox): Promi
 
 	console.log('SuiNS Contract published & set up successfully.');
 
-	return JSON.parse(fs.readFileSync(`${tmpobj.name}/scripts/constants.sdk.json`, 'utf8'));
+	return JSON.parse(fs.readFileSync(`${contractsFolder}/scripts/constants.sdk.json`, 'utf8'));
 }
 
 export async function execute(toolbox: TestToolbox, transactionBlock: TransactionBlock) {

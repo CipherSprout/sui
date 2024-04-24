@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { setupSuiClient, TestToolbox } from '../../kiosk/test/e2e/setup';
 import { AVATAR, CONTENT_HASH, SuinsClient, SuinsTransaction } from '../src';
-import { cloneAndPublishSuinsContracts, execute } from './setup';
+import { cloneSuinsContracts, execute, publishAndSetupSuinsContracts } from './setup';
 
 /**
  * This e2e suite needs to run sequential (state needs to be preserved on-chain across)
@@ -21,7 +21,11 @@ describe('Testing SuiNS SDK e2e', () => {
 	beforeAll(async () => {
 		toolbox = await setupSuiClient();
 
-		const constants = await retry(() => cloneAndPublishSuinsContracts(toolbox), {
+		// Clone `suins-contracts` from github on a temp / single use folder.
+		const folder = await cloneSuinsContracts();
+
+		// publish and setup these contracts and get back the constants (packageIds / objectIds).
+		const constants = await retry(() => publishAndSetupSuinsContracts(toolbox, folder), {
 			backoff: 'EXPONENTIAL',
 			// overall timeout in 2 minutes
 			timeout: 1000 * 60 * 2,
