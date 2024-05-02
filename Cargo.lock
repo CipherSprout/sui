@@ -11923,6 +11923,7 @@ dependencies = [
  "sui-config",
  "sui-json-rpc-api",
  "sui-json-rpc-types",
+ "sui-move-build",
  "sui-sdk",
  "sui-test-transaction-builder",
  "sui-types",
