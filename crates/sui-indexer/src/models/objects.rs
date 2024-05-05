@@ -132,7 +132,7 @@ impl From<StoredDeletedObject> for StoredObjectSnapshot {
     }
 }
 
-#[derive(Queryable, Insertable, Debug, Identifiable, Clone, QueryableByName)]
+#[derive(Queryable, Insertable, Debug, Identifiable, Clone, QueryableByName, Selectable)]
 #[diesel(table_name = objects_history, primary_key(object_id, object_version, checkpoint_sequence_number))]
 pub struct StoredHistoryObject {
     pub object_id: Vec<u8>,
