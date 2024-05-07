@@ -17,10 +17,8 @@ pub use crate::checkpoints::metrics::CheckpointMetrics;
 use crate::stake_aggregator::{InsertResult, MultiStakeAggregator};
 use crate::state_accumulator::StateAccumulator;
 use diffy::create_patch;
-use futures::future::{select, Either};
-use futures::FutureExt;
 use itertools::Itertools;
-use mysten_metrics::{monitored_scope, spawn_monitored_task, MonitoredFutureExt};
+use mysten_metrics::{monitored_scope, MonitoredFutureExt};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sui_macros::fail_point;
@@ -29,6 +27,7 @@ use sui_types::base_types::ConciseableName;
 use sui_types::executable_transaction::VerifiedExecutableTransaction;
 use sui_types::messages_checkpoint::CheckpointCommitment;
 use sui_types::sui_system_state::epoch_start_sui_system_state::EpochStartSystemStateTrait;
+use tokio::task::JoinSet;
 
 use crate::authority::authority_per_epoch_store::AuthorityPerEpochStore;
 use crate::consensus_handler::SequencedConsensusTransactionKey;
@@ -61,10 +60,7 @@ use sui_types::messages_consensus::ConsensusTransactionKey;
 use sui_types::signature::GenericSignature;
 use sui_types::sui_system_state::{SuiSystemState, SuiSystemStateTrait};
 use sui_types::transaction::{TransactionDataAPI, TransactionKey, TransactionKind};
-use tokio::{
-    sync::{watch, Notify},
-    time::timeout,
-};
+use tokio::{sync::Notify, time::timeout};
 use tracing::{debug, error, info, instrument, warn};
 use typed_store::traits::{TableSummary, TypedStoreDebug};
 use typed_store::Map;
@@ -860,7 +856,6 @@ pub struct CheckpointBuilder {
     effects_store: Arc<dyn EffectsNotifyRead>,
     accumulator: Arc<StateAccumulator>,
     output: Box<dyn CheckpointOutput>,
-    exit: watch::Receiver<()>,
     metrics: Arc<CheckpointMetrics>,
     max_transactions_per_checkpoint: usize,
     max_checkpoint_size_bytes: usize,
@@ -870,7 +865,6 @@ pub struct CheckpointAggregator {
     tables: Arc<CheckpointStore>,
     epoch_store: Arc<AuthorityPerEpochStore>,
     notify: Arc<Notify>,
-    exit: watch::Receiver<()>,
     current: Option<CheckpointSignatureAggregator>,
     output: Box<dyn CertifiedCheckpointOutput>,
     state: Arc<AuthorityState>,
@@ -898,7 +892,6 @@ impl CheckpointBuilder {
         effects_store: Arc<dyn EffectsNotifyRead>,
         accumulator: Arc<StateAccumulator>,
         output: Box<dyn CheckpointOutput>,
-        exit: watch::Receiver<()>,
         notify_aggregator: Arc<Notify>,
         metrics: Arc<CheckpointMetrics>,
         max_transactions_per_checkpoint: usize,
@@ -912,7 +905,6 @@ impl CheckpointBuilder {
             effects_store,
             accumulator,
             output,
-            exit,
             notify_aggregator,
             metrics,
             max_transactions_per_checkpoint,
@@ -920,17 +912,9 @@ impl CheckpointBuilder {
         }
     }
 
-    async fn run(mut self) {
+    async fn run(self) {
         info!("Starting CheckpointBuilder");
         'main: loop {
-            // Check whether an exit signal has been received, if so we break the loop.
-            // This gives us a chance to exit, in case checkpoint making keeps failing.
-            match self.exit.has_changed() {
-                Ok(true) | Err(_) => {
-                    break;
-                }
-                Ok(false) => (),
-            };
             let mut last = self
                 .epoch_store
                 .last_built_checkpoint_commit_height()
@@ -953,15 +937,8 @@ impl CheckpointBuilder {
                 }
             }
             debug!("Waiting for more checkpoints from consensus after processing {last:?}");
-            match select(self.exit.changed().boxed(), self.notify.notified().boxed()).await {
-                Either::Left(_) => {
-                    // break loop on exit signal
-                    break;
-                }
-                Either::Right(_) => {}
-            }
+            self.notify.notified().await;
         }
-        info!("Shutting down CheckpointBuilder");
     }
 
     #[instrument(level = "debug", skip_all, fields(?height))]
@@ -1463,7 +1440,6 @@ impl CheckpointAggregator {
         tables: Arc<CheckpointStore>,
         epoch_store: Arc<AuthorityPerEpochStore>,
         notify: Arc<Notify>,
-        exit: watch::Receiver<()>,
         output: Box<dyn CertifiedCheckpointOutput>,
         state: Arc<AuthorityState>,
         metrics: Arc<CheckpointMetrics>,
@@ -1473,7 +1449,6 @@ impl CheckpointAggregator {
             tables,
             epoch_store,
             notify,
-            exit,
             current,
             output,
             state,
@@ -1494,19 +1469,7 @@ impl CheckpointAggregator {
                 continue;
             }
 
-            match select(
-                self.exit.changed().boxed(),
-                timeout(Duration::from_secs(1), self.notify.notified()).boxed(),
-            )
-            .await
-            {
-                Either::Left(_) => {
-                    // return on exit signal
-                    info!("Shutting down CheckpointAggregator");
-                    return;
-                }
-                Either::Right(_) => {}
-            }
+            let _ = timeout(Duration::from_secs(1), self.notify.notified()).await;
         }
     }
 
@@ -1927,14 +1890,14 @@ impl CheckpointService {
         metrics: Arc<CheckpointMetrics>,
         max_transactions_per_checkpoint: usize,
         max_checkpoint_size_bytes: usize,
-    ) -> (Arc<Self>, watch::Sender<()> /* The exit sender */) {
+    ) -> (Arc<Self>, JoinSet<()> /* Handle to tasks */) {
         info!(
             "Starting checkpoint service with {max_transactions_per_checkpoint} max_transactions_per_checkpoint and {max_checkpoint_size_bytes} max_checkpoint_size_bytes"
         );
         let notify_builder = Arc::new(Notify::new());
         let notify_aggregator = Arc::new(Notify::new());
 
-        let (exit_snd, exit_rcv) = watch::channel(());
+        let mut tasks = JoinSet::new();
 
         let builder = CheckpointBuilder::new(
             state.clone(),
@@ -1944,26 +1907,24 @@ impl CheckpointService {
             effects_store,
             accumulator,
             checkpoint_output,
-            exit_rcv.clone(),
             notify_aggregator.clone(),
             metrics.clone(),
             max_transactions_per_checkpoint,
             max_checkpoint_size_bytes,
         );
 
-        spawn_monitored_task!(builder.run());
+        tasks.spawn(builder.run());
 
         let aggregator = CheckpointAggregator::new(
             checkpoint_store.clone(),
             epoch_store.clone(),
             notify_aggregator.clone(),
-            exit_rcv,
             certified_checkpoint_output,
             state.clone(),
             metrics.clone(),
         );
 
-        spawn_monitored_task!(aggregator.run());
+        tasks.spawn(aggregator.run());
 
         let last_signature_index = epoch_store
             .get_last_checkpoint_signature_index()
@@ -1977,7 +1938,7 @@ impl CheckpointService {
             last_signature_index,
             metrics,
         });
-        (service, exit_snd)
+        (service, tasks)
     }
 
     #[cfg(test)]
@@ -2204,7 +2165,7 @@ mod tests {
         let accumulator = StateAccumulator::new(state.get_accumulator_store().clone());
 
         let epoch_store = state.epoch_store_for_testing();
-        let (checkpoint_service, _exit) = CheckpointService::spawn(
+        let (checkpoint_service, _tasks) = CheckpointService::spawn(
             state.clone(),
             checkpoint_store,
             epoch_store.clone(),
