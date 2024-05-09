@@ -95,6 +95,7 @@ members = [
   "crates/sui-aws-orchestrator",
   "crates/sui-benchmark",
   "crates/sui-bridge",
+  "crates/sui-client-gen",
   "crates/sui-cluster-test",
   "crates/sui-common",
   "crates/sui-config",
@@ -561,6 +562,7 @@ move-stackless-bytecode = { path = "external-crates/move/crates/move-stackless-b
 move-symbol-pool = { path = "external-crates/move/crates/move-symbol-pool" }
 move-abstract-interpreter = { path = "external-crates/move/crates/move-abstract-interpreter" }
 move-abstract-stack = { path = "external-crates/move/crates/move-abstract-stack" }
+move-model = { path = "external-crates/move/crates/move-model" }
 
 fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "4988a4744fcaf8bc7f60bf660d9a223ed0f54cc6" }
 fastcrypto-tbls = { git = "https://github.com/MystenLabs/fastcrypto", rev = "4988a4744fcaf8bc7f60bf660d9a223ed0f54cc6" }
@@ -591,6 +593,7 @@ sui-analytics-indexer-derive = { path = "crates/sui-analytics-indexer-derive" }
 sui-archival = { path = "crates/sui-archival" }
 sui-authority-aggregation = { path = "crates/sui-authority-aggregation" }
 sui-benchmark = { path = "crates/sui-benchmark" }
+sui-client-gen = { path = "crates/sui-client-gen" }
 sui-cluster-test = { path = "crates/sui-cluster-test" }
 sui-common = { path = "crates/sui-common" }
 sui-config = { path = "crates/sui-config" }
