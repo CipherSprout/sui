@@ -2018,6 +2018,12 @@ type MovePackage implements IObject & IOwner {
 	"""
 	atVersion(version: Int!): MovePackage
 	"""
+	Fetch all versions of this package (packages that share this package's original ID),
+	optionally bounding the versions exclusively from below with `afterVersion`, or from above
+	with `beforeVersion`.
+	"""
+	versions(first: Int, after: String, last: Int, before: String, afterVersion: Int, beforeVersion: Int): MovePackageConnection!
+	"""
 	Fetch the latest version of this package (the package with the highest `version` that shares
 	this packages's original ID)
 	"""
@@ -2942,6 +2948,12 @@ type Query {
 	specified checkpoints, but only records the latest versions of system packages.
 	"""
 	packages(first: Int, after: String, last: Int, before: String, afterCheckpoint: Int, beforeCheckpoint: Int): MovePackageConnection!
+	"""
+	Fetch all versions of package at `address` (packages that share this package's original ID),
+	optionally bounding the versions exclusively from below with `afterVersion`, or from above
+	with `beforeVersion`.
+	"""
+	packageVersions(first: Int, after: String, last: Int, before: String, address: SuiAddress!, afterVersion: Int, beforeVersion: Int): MovePackageConnection!
 	"""
 	Fetch the protocol config by protocol version (defaults to the latest protocol
 	version known to the GraphQL service).
@@ -4251,3 +4263,4 @@ schema {
 	query: Query
 	mutation: Mutation
 }
+
