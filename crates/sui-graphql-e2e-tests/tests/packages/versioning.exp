@@ -1,4 +1,4 @@
-processed 14 tasks
+processed 15 tasks
 
 init:
 A: object(0,0)
@@ -11,7 +11,7 @@ gas summary: computation_cost: 1000000, storage_cost: 5076800,  storage_rebate: 
 task 2 'create-checkpoint'. lines 11-11:
 Checkpoint created: 1
 
-task 3 'run-graphql'. lines 13-21:
+task 3 'run-graphql'. lines 13-28:
 Response: {
   "data": {
     "latestPackage": {
@@ -25,19 +25,43 @@ Response: {
           ]
         }
       }
+    },
+    "packages": {
+      "nodes": [
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000001",
+          "version": 1
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000002",
+          "version": 1
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000003",
+          "version": 1
+        },
+        {
+          "address": "0x000000000000000000000000000000000000000000000000000000000000dee9",
+          "version": 1
+        },
+        {
+          "address": "0x175ae86f2df1eb652d57fbe9e44c7f2d67870d2b6776a4356f30930221b63b88",
+          "version": 1
+        }
+      ]
     }
   }
 }
 
-task 4 'upgrade'. lines 23-27:
+task 4 'upgrade'. lines 30-34:
 created: object(4,0)
 mutated: object(0,0), object(1,1)
 gas summary: computation_cost: 1000000, storage_cost: 5251600,  storage_rebate: 2595780, non_refundable_storage_fee: 26220
 
-task 5 'create-checkpoint'. lines 29-29:
+task 5 'create-checkpoint'. lines 36-36:
 Checkpoint created: 2
 
-task 6 'run-graphql'. lines 31-39:
+task 6 'run-graphql'. lines 38-53:
 Response: {
   "data": {
     "latestPackage": {
@@ -54,19 +78,47 @@ Response: {
           ]
         }
       }
+    },
+    "packages": {
+      "nodes": [
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000001",
+          "version": 1
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000002",
+          "version": 1
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000003",
+          "version": 1
+        },
+        {
+          "address": "0x000000000000000000000000000000000000000000000000000000000000dee9",
+          "version": 1
+        },
+        {
+          "address": "0x175ae86f2df1eb652d57fbe9e44c7f2d67870d2b6776a4356f30930221b63b88",
+          "version": 1
+        },
+        {
+          "address": "0x351bc614b36f0f522a64334e4c278d4bfe200234958870c084e0a005f041d681",
+          "version": 2
+        }
+      ]
     }
   }
 }
 
-task 7 'upgrade'. lines 41-46:
+task 7 'upgrade'. lines 55-60:
 created: object(7,0)
 mutated: object(0,0), object(1,1)
 gas summary: computation_cost: 1000000, storage_cost: 5426400,  storage_rebate: 2595780, non_refundable_storage_fee: 26220
 
-task 8 'create-checkpoint'. lines 48-48:
+task 8 'create-checkpoint'. lines 62-62:
 Checkpoint created: 3
 
-task 9 'run-graphql'. lines 50-58:
+task 9 'run-graphql'. lines 64-79:
 Response: {
   "data": {
     "latestPackage": {
@@ -86,11 +138,43 @@ Response: {
           ]
         }
       }
+    },
+    "packages": {
+      "nodes": [
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000001",
+          "version": 1
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000002",
+          "version": 1
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000003",
+          "version": 1
+        },
+        {
+          "address": "0x000000000000000000000000000000000000000000000000000000000000dee9",
+          "version": 1
+        },
+        {
+          "address": "0x175ae86f2df1eb652d57fbe9e44c7f2d67870d2b6776a4356f30930221b63b88",
+          "version": 1
+        },
+        {
+          "address": "0x351bc614b36f0f522a64334e4c278d4bfe200234958870c084e0a005f041d681",
+          "version": 2
+        },
+        {
+          "address": "0x0eae57b7a07b0548b1f6b0c309f0692828ff994e9159b541334b25582980631c",
+          "version": 3
+        }
+      ]
     }
   }
 }
 
-task 10 'run-graphql'. lines 60-97:
+task 10 'run-graphql'. lines 81-118:
 Response: {
   "data": {
     "v1": {
@@ -189,7 +273,7 @@ Response: {
   }
 }
 
-task 11 'run-graphql'. lines 99-136:
+task 11 'run-graphql'. lines 120-157:
 Response: {
   "data": {
     "v1_from_p1": {
@@ -279,7 +363,7 @@ Response: {
   }
 }
 
-task 12 'run-graphql'. lines 138-193:
+task 12 'run-graphql'. lines 159-214:
 Response: {
   "data": {
     "v1": {
@@ -417,7 +501,7 @@ Response: {
   }
 }
 
-task 13 'run-graphql'. lines 195-223:
+task 13 'run-graphql'. lines 216-244:
 Response: {
   "data": {
     "v0": null,
@@ -426,5 +510,100 @@ Response: {
       "v4": null
     },
     "v4": null
+  }
+}
+
+task 14 'run-graphql'. lines 246-277:
+Response: {
+  "data": {
+    "before": {
+      "nodes": [
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000001",
+          "version": 1,
+          "previousTransactionBlock": {
+            "effects": {
+              "checkpoint": {
+                "sequenceNumber": 0
+              }
+            }
+          }
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000002",
+          "version": 1,
+          "previousTransactionBlock": {
+            "effects": {
+              "checkpoint": {
+                "sequenceNumber": 0
+              }
+            }
+          }
+        },
+        {
+          "address": "0x0000000000000000000000000000000000000000000000000000000000000003",
+          "version": 1,
+          "previousTransactionBlock": {
+            "effects": {
+              "checkpoint": {
+                "sequenceNumber": 0
+              }
+            }
+          }
+        },
+        {
+          "address": "0x000000000000000000000000000000000000000000000000000000000000dee9",
+          "version": 1,
+          "previousTransactionBlock": {
+            "effects": {
+              "checkpoint": {
+                "sequenceNumber": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "after": {
+      "nodes": [
+        {
+          "address": "0x351bc614b36f0f522a64334e4c278d4bfe200234958870c084e0a005f041d681",
+          "version": 2,
+          "previousTransactionBlock": {
+            "effects": {
+              "checkpoint": {
+                "sequenceNumber": 2
+              }
+            }
+          }
+        },
+        {
+          "address": "0x0eae57b7a07b0548b1f6b0c309f0692828ff994e9159b541334b25582980631c",
+          "version": 3,
+          "previousTransactionBlock": {
+            "effects": {
+              "checkpoint": {
+                "sequenceNumber": 3
+              }
+            }
+          }
+        }
+      ]
+    },
+    "between": {
+      "nodes": [
+        {
+          "address": "0x351bc614b36f0f522a64334e4c278d4bfe200234958870c084e0a005f041d681",
+          "version": 2,
+          "previousTransactionBlock": {
+            "effects": {
+              "checkpoint": {
+                "sequenceNumber": 2
+              }
+            }
+          }
+        }
+      ]
+    }
   }
 }

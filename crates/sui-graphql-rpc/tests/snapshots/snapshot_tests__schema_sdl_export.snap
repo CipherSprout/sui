@@ -2935,6 +2935,14 @@ type Query {
 	"""
 	objects(first: Int, after: String, last: Int, before: String, filter: ObjectFilter): ObjectConnection!
 	"""
+	The Move packages that exist in the network, optionally filtered to be strictly before
+	`beforeCheckpoint` and/or strictly after `afterCheckpoint`.
+	
+	This query will return all versions of a given user package that appear between the
+	specified checkpoints, but only records the latest versions of system packages.
+	"""
+	packages(first: Int, after: String, last: Int, before: String, afterCheckpoint: Int, beforeCheckpoint: Int): MovePackageConnection!
+	"""
 	Fetch the protocol config by protocol version (defaults to the latest protocol
 	version known to the GraphQL service).
 	"""
