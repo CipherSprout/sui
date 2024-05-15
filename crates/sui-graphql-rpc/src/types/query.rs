@@ -440,6 +440,35 @@ impl Query {
         .extend()
     }
 
+    /// Fetch all versions of package at `address` (packages that share this package's original ID),
+    /// optionally bounding the versions exclusively from below with `afterVersion`, or from above
+    /// with `beforeVersion`.
+    async fn package_versions(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<u64>,
+        after: Option<move_package::Cursor>,
+        last: Option<u64>,
+        before: Option<move_package::Cursor>,
+        address: SuiAddress,
+        after_version: Option<u64>,
+        before_version: Option<u64>,
+    ) -> Result<Connection<String, MovePackage>> {
+        let Watermark { checkpoint, .. } = *ctx.data()?;
+
+        let page = Page::from_params(ctx.data_unchecked(), first, after, last, before)?;
+        MovePackage::paginate_by_version(
+            ctx.data_unchecked(),
+            page,
+            address,
+            after_version,
+            before_version,
+            checkpoint,
+        )
+        .await
+        .extend()
+    }
+
     /// Fetch the protocol config by protocol version (defaults to the latest protocol
     /// version known to the GraphQL service).
     async fn protocol_config(
