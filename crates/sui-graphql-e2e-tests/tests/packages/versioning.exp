@@ -1,4 +1,4 @@
-processed 9 tasks
+processed 14 tasks
 
 init:
 A: object(0,0)
@@ -8,23 +8,14 @@ created: object(1,0), object(1,1)
 mutated: object(0,0)
 gas summary: computation_cost: 1000000, storage_cost: 5076800,  storage_rebate: 0, non_refundable_storage_fee: 0
 
-task 2 'upgrade'. lines 11-15:
-created: object(2,0)
-mutated: object(0,0), object(1,1)
-gas summary: computation_cost: 1000000, storage_cost: 5251600,  storage_rebate: 2595780, non_refundable_storage_fee: 26220
-
-task 3 'upgrade'. lines 17-22:
-created: object(3,0)
-mutated: object(0,0), object(1,1)
-gas summary: computation_cost: 1000000, storage_cost: 5426400,  storage_rebate: 2595780, non_refundable_storage_fee: 26220
-
-task 4 'create-checkpoint'. lines 24-24:
+task 2 'create-checkpoint'. lines 11-11:
 Checkpoint created: 1
 
-task 5 'run-graphql'. lines 26-45:
+task 3 'run-graphql'. lines 13-21:
 Response: {
   "data": {
-    "v1": {
+    "latestPackage": {
+      "version": 1,
       "module": {
         "functions": {
           "nodes": [
@@ -34,8 +25,23 @@ Response: {
           ]
         }
       }
-    },
-    "v2": {
+    }
+  }
+}
+
+task 4 'upgrade'. lines 23-27:
+created: object(4,0)
+mutated: object(0,0), object(1,1)
+gas summary: computation_cost: 1000000, storage_cost: 5251600,  storage_rebate: 2595780, non_refundable_storage_fee: 26220
+
+task 5 'create-checkpoint'. lines 29-29:
+Checkpoint created: 2
+
+task 6 'run-graphql'. lines 31-39:
+Response: {
+  "data": {
+    "latestPackage": {
+      "version": 2,
       "module": {
         "functions": {
           "nodes": [
@@ -48,8 +54,23 @@ Response: {
           ]
         }
       }
-    },
-    "v3": {
+    }
+  }
+}
+
+task 7 'upgrade'. lines 41-46:
+created: object(7,0)
+mutated: object(0,0), object(1,1)
+gas summary: computation_cost: 1000000, storage_cost: 5426400,  storage_rebate: 2595780, non_refundable_storage_fee: 26220
+
+task 8 'create-checkpoint'. lines 48-48:
+Checkpoint created: 3
+
+task 9 'run-graphql'. lines 50-58:
+Response: {
+  "data": {
+    "latestPackage": {
+      "version": 3,
       "module": {
         "functions": {
           "nodes": [
@@ -69,7 +90,106 @@ Response: {
   }
 }
 
-task 6 'run-graphql'. lines 47-84:
+task 10 'run-graphql'. lines 60-97:
+Response: {
+  "data": {
+    "v1": {
+      "module": {
+        "functions": {
+          "nodes": [
+            {
+              "name": "f"
+            }
+          ]
+        }
+      },
+      "latest": {
+        "module": {
+          "functions": {
+            "nodes": [
+              {
+                "name": "f"
+              },
+              {
+                "name": "g"
+              },
+              {
+                "name": "h"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "v2": {
+      "module": {
+        "functions": {
+          "nodes": [
+            {
+              "name": "f"
+            },
+            {
+              "name": "g"
+            }
+          ]
+        }
+      },
+      "latest": {
+        "module": {
+          "functions": {
+            "nodes": [
+              {
+                "name": "f"
+              },
+              {
+                "name": "g"
+              },
+              {
+                "name": "h"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "v3": {
+      "module": {
+        "functions": {
+          "nodes": [
+            {
+              "name": "f"
+            },
+            {
+              "name": "g"
+            },
+            {
+              "name": "h"
+            }
+          ]
+        }
+      },
+      "latest": {
+        "module": {
+          "functions": {
+            "nodes": [
+              {
+                "name": "f"
+              },
+              {
+                "name": "g"
+              },
+              {
+                "name": "h"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+
+task 11 'run-graphql'. lines 99-136:
 Response: {
   "data": {
     "v1_from_p1": {
@@ -159,7 +279,7 @@ Response: {
   }
 }
 
-task 7 'run-graphql'. lines 86-141:
+task 12 'run-graphql'. lines 138-193:
 Response: {
   "data": {
     "v1": {
@@ -297,7 +417,7 @@ Response: {
   }
 }
 
-task 8 'run-graphql'. lines 143-171:
+task 13 'run-graphql'. lines 195-223:
 Response: {
   "data": {
     "v0": null,
