@@ -831,7 +831,14 @@ Response: {
                   "repr": "u64"
                 }
               },
-              "value": null
+              "value": {
+                "contents": {
+                  "json": {
+                    "id": "0x844185d7b145f503838a1d509845a40ee249534f723dd2f003d9efdfc581000d",
+                    "count": "1"
+                  }
+                }
+              }
             }
           }
         ]
@@ -892,7 +899,14 @@ Response: {
                   "repr": "u64"
                 }
               },
-              "value": null
+              "value": {
+                "contents": {
+                  "json": {
+                    "id": "0x844185d7b145f503838a1d509845a40ee249534f723dd2f003d9efdfc581000d",
+                    "count": "1"
+                  }
+                }
+              }
             }
           }
         ]
@@ -928,7 +942,17 @@ task 34 'run-graphql'. lines 497-528:
 Response: {
   "data": {
     "parent_version_4": {
-      "dfAtParentVersion4_outside_range": null
+      "dfAtParentVersion4_outside_range": {
+        "name": {
+          "bcs": "A2RmMQ==",
+          "type": {
+            "repr": "0x0000000000000000000000000000000000000000000000000000000000000001::string::String"
+          }
+        },
+        "value": {
+          "json": "df1"
+        }
+      }
     },
     "parent_version_6": {
       "dfAtParentVersion6": null
