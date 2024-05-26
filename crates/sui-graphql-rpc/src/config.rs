@@ -13,6 +13,7 @@ use sui_json_rpc::name_service::NameServiceConfig;
 /// These values are set to support TS SDK shim layer queries for json-rpc compatibility.
 const MAX_QUERY_NODES: u32 = 300;
 const MAX_QUERY_PAYLOAD_SIZE: u32 = 5_000;
+const MAX_MUTATION_PAYLOAD_SIZE: u32 = 131_000;
 
 const MAX_QUERY_DEPTH: u32 = 20;
 const MAX_OUTPUT_NODES: u64 = 100_000; // Maximum number of output nodes allowed in the response
@@ -126,6 +127,8 @@ pub struct Limits {
     pub max_query_nodes: u32,
     #[serde(default)]
     pub max_output_nodes: u64,
+    #[serde(default)]
+    pub max_mutation_payload_size: u32,
     #[serde(default)]
     pub max_query_payload_size: u32,
     #[serde(default)]
@@ -324,6 +327,11 @@ impl ServiceConfig {
         self.limits.request_timeout_ms
     }
 
+    /// Maximum mutation payload size in bytes.
+    async fn max_mutation_payload_size(&self) -> u32 {
+        self.limits.max_mutation_payload_size
+    }
+
     /// Maximum length of a query payload string.
     async fn max_query_payload_size(&self) -> u32 {
         self.limits.max_query_payload_size
@@ -498,6 +506,7 @@ impl Default for Limits {
             max_query_depth: MAX_QUERY_DEPTH,
             max_query_nodes: MAX_QUERY_NODES,
             max_output_nodes: MAX_OUTPUT_NODES,
+            max_mutation_payload_size: MAX_MUTATION_PAYLOAD_SIZE,
             max_query_payload_size: MAX_QUERY_PAYLOAD_SIZE,
             max_db_query_cost: MAX_DB_QUERY_COST,
             default_page_size: DEFAULT_PAGE_SIZE,
@@ -553,6 +562,7 @@ mod tests {
                 max-query-depth = 100
                 max-query-nodes = 300
                 max-output-nodes = 200000
+                max-mutation-payload-size = 131000
                 max-query-payload-size = 2000
                 max-db-query-cost = 50
                 default-page-size = 20
@@ -572,6 +582,7 @@ mod tests {
                 max_query_depth: 100,
                 max_query_nodes: 300,
                 max_output_nodes: 200000,
+                max_mutation_payload_size: 131_000,
                 max_query_payload_size: 2000,
                 max_db_query_cost: 50,
                 default_page_size: 20,
@@ -635,6 +646,7 @@ mod tests {
                 max-query-depth = 42
                 max-query-nodes = 320
                 max-output-nodes = 200000
+                max-mutation-payload-size = 131000
                 max-query-payload-size = 200
                 max-db-query-cost = 20
                 default-page-size = 10
@@ -657,6 +669,7 @@ mod tests {
                 max_query_depth: 42,
                 max_query_nodes: 320,
                 max_output_nodes: 200000,
+                max_mutation_payload_size: 131_000,
                 max_query_payload_size: 200,
                 max_db_query_cost: 20,
                 default_page_size: 10,
