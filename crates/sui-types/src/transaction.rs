@@ -303,7 +303,7 @@ pub enum EndOfEpochTransactionKind {
     RandomnessStateCreate,
     DenyListStateCreate,
     BridgeStateCreate(ChainIdentifier),
-    BridgeCommitteeInit(SequenceNumber),
+    BridgeCommitteeInit(ChainIdentifier, SequenceNumber),
 }
 
 impl EndOfEpochTransactionKind {
@@ -355,8 +355,11 @@ impl EndOfEpochTransactionKind {
         Self::BridgeStateCreate(chain_identifier)
     }
 
-    pub fn init_bridge_committee(bridge_shared_version: SequenceNumber) -> Self {
-        Self::BridgeCommitteeInit(bridge_shared_version)
+    pub fn init_bridge_committee(
+        chain_identifier: ChainIdentifier,
+        bridge_shared_version: SequenceNumber,
+    ) -> Self {
+        Self::BridgeCommitteeInit(chain_identifier, bridge_shared_version)
     }
 
     fn input_objects(&self) -> Vec<InputObjectKind> {
@@ -379,7 +382,7 @@ impl EndOfEpochTransactionKind {
             Self::RandomnessStateCreate => vec![],
             Self::DenyListStateCreate => vec![],
             Self::BridgeStateCreate(_) => vec![],
-            Self::BridgeCommitteeInit(bridge_version) => vec![
+            Self::BridgeCommitteeInit(_, bridge_version) => vec![
                 InputObjectKind::SharedMoveObject {
                     id: SUI_BRIDGE_OBJECT_ID,
                     initial_shared_version: *bridge_version,
@@ -411,7 +414,7 @@ impl EndOfEpochTransactionKind {
             Self::RandomnessStateCreate => Either::Right(iter::empty()),
             Self::DenyListStateCreate => Either::Right(iter::empty()),
             Self::BridgeStateCreate(_) => Either::Right(iter::empty()),
-            Self::BridgeCommitteeInit(bridge_version) => Either::Left(
+            Self::BridgeCommitteeInit(_, bridge_version) => Either::Left(
                 vec![
                     SharedInputObject {
                         id: SUI_BRIDGE_OBJECT_ID,
@@ -440,7 +443,7 @@ impl EndOfEpochTransactionKind {
                 // Transaction should have been rejected earlier (or never formed).
                 assert!(config.enable_coin_deny_list());
             }
-            Self::BridgeStateCreate(_) | Self::BridgeCommitteeInit(_) => {
+            Self::BridgeStateCreate(_) | Self::BridgeCommitteeInit(_, _) => {
                 // Transaction should have been rejected earlier (or never formed).
                 assert!(config.enable_bridge());
             }
@@ -533,7 +536,7 @@ impl VersionedProtocolMessage for TransactionKind {
                                     });
                                 }
                             }
-                            EndOfEpochTransactionKind::BridgeCommitteeInit(_) => {
+                            EndOfEpochTransactionKind::BridgeCommitteeInit(_, _) => {
                                 if !protocol_config.enable_bridge() {
                                     return Err(SuiError::UnsupportedFeatureError {
                                         error: "bridge not enabled".to_string(),

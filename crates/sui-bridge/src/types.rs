@@ -25,7 +25,6 @@ use std::fmt::Debug;
 use sui_types::bridge::{
     BridgeChainId, MoveTypeTokenTransferPayload, APPROVAL_THRESHOLD_ADD_TOKENS_ON_EVM,
     APPROVAL_THRESHOLD_ADD_TOKENS_ON_SUI, BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER,
-    BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
 };
 use sui_types::bridge::{
     MoveTypeParsedTokenTransferMessage, APPROVAL_THRESHOLD_ASSET_PRICE_UPDATE,
@@ -64,7 +63,10 @@ pub struct BridgeCommittee {
 }
 
 impl BridgeCommittee {
-    pub fn new(members: Vec<BridgeAuthority>) -> BridgeResult<Self> {
+    pub fn new(
+        minimal_committee_voting_power: u64,
+        members: Vec<BridgeAuthority>,
+    ) -> BridgeResult<Self> {
         let mut members_map = BTreeMap::new();
         let mut total_blocklisted_stake = 0;
         let mut total_stake = 0;
@@ -82,9 +84,9 @@ impl BridgeCommittee {
             total_stake += member.voting_power;
             members_map.insert(public_key, member);
         }
-        if total_stake < BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER {
+        if total_stake < minimal_committee_voting_power {
             return Err(BridgeError::InvalidBridgeCommittee(format!(
-                "Total voting power is below minimal {BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER}"
+                "Total voting power is below minimal {minimal_committee_voting_power}"
             )));
         }
         if total_stake > BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER {
@@ -545,6 +547,7 @@ mod tests {
     use ethers::types::Address as EthAddress;
     use fastcrypto::traits::KeyPair;
     use std::collections::HashSet;
+    use sui_types::bridge::BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
     use sui_types::bridge::TOKEN_ID_BTC;
     use sui_types::crypto::get_key_pair;
 
@@ -554,15 +557,15 @@ mod tests {
     fn test_bridge_committee_construction() -> anyhow::Result<()> {
         let (mut authority, _, _) = get_test_authority_and_key(8000, 9999);
         // This is ok
-        let _ = BridgeCommittee::new(vec![authority.clone()]).unwrap();
+        let _ = BridgeCommittee::new(7500, vec![authority.clone()]).unwrap();
 
-        // This is not ok - total voting power < BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER
-        authority.voting_power = BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER - 1;
-        let _ = BridgeCommittee::new(vec![authority.clone()]).unwrap_err();
+        // This is not ok - total voting power < 7500
+        authority.voting_power = 7499;
+        let _ = BridgeCommittee::new(7500, vec![authority.clone()]).unwrap_err();
 
         // This is not ok - total voting power > BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER
         authority.voting_power = BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER + 1;
-        let _ = BridgeCommittee::new(vec![authority.clone()]).unwrap_err();
+        let _ = BridgeCommittee::new(7500, vec![authority.clone()]).unwrap_err();
 
         // This is ok
         authority.voting_power = 5000;
@@ -570,11 +573,19 @@ mod tests {
         let (_, kp): (_, fastcrypto::secp256k1::Secp256k1KeyPair) = get_key_pair();
         let pubkey = kp.public().clone();
         authority_2.pubkey = pubkey.clone();
-        let _ = BridgeCommittee::new(vec![authority.clone(), authority_2.clone()]).unwrap();
+        let _ = BridgeCommittee::new(
+            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
+            vec![authority.clone(), authority_2.clone()],
+        )
+        .unwrap();
 
         // This is not ok - duplicate pub key
         authority_2.pubkey = authority.pubkey.clone();
-        let _ = BridgeCommittee::new(vec![authority.clone(), authority.clone()]).unwrap_err();
+        let _ = BridgeCommittee::new(
+            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
+            vec![authority.clone(), authority.clone()],
+        )
+        .unwrap_err();
         Ok(())
     }
 
@@ -582,9 +593,12 @@ mod tests {
     fn test_bridge_committee_total_blocklisted_stake() -> anyhow::Result<()> {
         let (mut authority1, _, _) = get_test_authority_and_key(10000, 9999);
         assert_eq!(
-            BridgeCommittee::new(vec![authority1.clone()])
-                .unwrap()
-                .total_blocklisted_stake(),
+            BridgeCommittee::new(
+                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
+                vec![authority1.clone()]
+            )
+            .unwrap()
+            .total_blocklisted_stake(),
             0
         );
         authority1.voting_power = 6000;
@@ -592,9 +606,12 @@ mod tests {
         let (mut authority2, _, _) = get_test_authority_and_key(4000, 9999);
         authority2.is_blocklisted = true;
         assert_eq!(
-            BridgeCommittee::new(vec![authority1.clone(), authority2.clone()])
-                .unwrap()
-                .total_blocklisted_stake(),
+            BridgeCommittee::new(
+                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
+                vec![authority1.clone(), authority2.clone()]
+            )
+            .unwrap()
+            .total_blocklisted_stake(),
             4000
         );
 
@@ -603,9 +620,12 @@ mod tests {
         let (mut authority3, _, _) = get_test_authority_and_key(1000, 9999);
         authority3.is_blocklisted = true;
         assert_eq!(
-            BridgeCommittee::new(vec![authority1, authority2, authority3])
-                .unwrap()
-                .total_blocklisted_stake(),
+            BridgeCommittee::new(
+                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
+                vec![authority1, authority2, authority3]
+            )
+            .unwrap()
+            .total_blocklisted_stake(),
             3000
         );
 
@@ -677,11 +697,10 @@ mod tests {
         let (mut authority2, _, _) = get_test_authority_and_key(3000, 9999);
         authority2.is_blocklisted = true;
         let (authority3, _, _) = get_test_authority_and_key(2000, 9999);
-        let committee = BridgeCommittee::new(vec![
-            authority1.clone(),
-            authority2.clone(),
-            authority3.clone(),
-        ])
+        let committee = BridgeCommittee::new(
+            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
+            vec![authority1.clone(), authority2.clone(), authority3.clone()],
+        )
         .unwrap();
 
         // exclude authority2

@@ -38,10 +38,12 @@ mod checked {
         AUTHENTICATOR_STATE_MODULE_NAME, AUTHENTICATOR_STATE_UPDATE_FUNCTION_NAME,
     };
     use sui_types::base_types::SequenceNumber;
-    use sui_types::bridge::BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
     use sui_types::bridge::{
         BridgeChainId, BRIDGE_CREATE_FUNCTION_NAME, BRIDGE_INIT_COMMITTEE_FUNCTION_NAME,
         BRIDGE_MODULE_NAME,
+    };
+    use sui_types::bridge::{
+        BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER_TESTNET,
     };
     use sui_types::clock::{CLOCK_MODULE_NAME, CONSENSUS_COMMIT_PROLOGUE_FUNCTION_NAME};
     use sui_types::committee::EpochId;
@@ -669,9 +671,16 @@ mod checked {
                             assert!(protocol_config.enable_bridge());
                             builder = setup_bridge_create(builder, chain_id)
                         }
-                        EndOfEpochTransactionKind::BridgeCommitteeInit(bridge_shared_version) => {
+                        EndOfEpochTransactionKind::BridgeCommitteeInit(
+                            chain_id,
+                            bridge_shared_version,
+                        ) => {
                             assert!(protocol_config.enable_bridge());
-                            builder = setup_bridge_committee_update(builder, bridge_shared_version)
+                            builder = setup_bridge_committee_update(
+                                builder,
+                                bridge_shared_version,
+                                chain_id,
+                            )
                         }
                     }
                 }
@@ -1101,6 +1110,7 @@ mod checked {
     fn setup_bridge_committee_update(
         mut builder: ProgrammableTransactionBuilder,
         bridge_shared_version: SequenceNumber,
+        chain_id: ChainIdentifier,
     ) -> ProgrammableTransactionBuilder {
         let bridge = builder
             .obj(ObjectArg::SharedObject {
@@ -1121,11 +1131,15 @@ mod checked {
             vec![system_state],
         );
 
-        // Hardcoding min stake participation to 75.00%
-        // TODO: We need to set a correct value or make this configurable.
+        let min_stake_participation_percentage = if chain_id == get_testnet_chain_identifier() {
+            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER_TESTNET
+        } else {
+            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER
+        };
+
         let min_stake_participation_percentage = builder
             .input(CallArg::Pure(
-                bcs::to_bytes(&BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER).unwrap(),
+                bcs::to_bytes(&min_stake_participation_percentage).unwrap(),
             ))
             .unwrap();
 
