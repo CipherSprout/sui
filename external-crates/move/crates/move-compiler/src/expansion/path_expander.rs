@@ -8,7 +8,7 @@ use crate::{
     diagnostics::Diagnostic,
     editions::{create_feature_error, Edition, FeatureGate},
     expansion::{
-        alias_map_builder::{AliasEntry, AliasMapBuilder, NameSpace},
+        alias_map_builder::{AliasEntry, AliasMapBuilder, NameSpace, UnnecessaryAlias},
         aliases::{AliasMap, AliasSet},
         ast::{self as E, Address, ModuleIdent, ModuleIdent_},
         legacy_aliases,
@@ -22,7 +22,10 @@ use crate::{
         ast::{self as P, ModuleName, NameAccess, NamePath, PathEntry, Type},
         syntax::make_loc,
     },
-    shared::*,
+    shared::{
+        ide::{AliasAutocompleteInfo, IDEAnnotation},
+        *,
+    },
 };
 
 use move_ir_types::location::{sp, Loc, Spanned};
@@ -125,8 +128,6 @@ macro_rules! access_result {
 
 pub(crate) use access_result;
 
-use super::alias_map_builder::UnnecessaryAlias;
-
 //**************************************************************************************************
 // Move 2024 Path Expander
 //**************************************************************************************************
@@ -215,7 +216,7 @@ impl Move2024PathExpander {
     ) -> AccessChainNameResult {
         use AccessChainFailure as NF;
         use AccessChainNameResult as NR;
-
+        self.ide_autocomplete_suggestion(context, &namespace, name.loc);
         match self.aliases.resolve(namespace, &name) {
             Some(AliasEntry::Member(_, mident, sp!(_, mem))) => {
                 // We are preserving the name's original location, rather than referring to where
@@ -474,6 +475,22 @@ impl Move2024PathExpander {
                     is_macro,
                 }
             }
+        }
+    }
+
+    fn ide_autocomplete_suggestion(
+        &mut self,
+        context: &mut DefnContext,
+        namespace: &NameSpace,
+        loc: Loc,
+    ) {
+        if context.env.ide_mode() {
+            let info: AliasAutocompleteInfo = match namespace {
+                NameSpace::LeadingAccess => self.aliases.get_all_leading_names().into(),
+                NameSpace::ModuleMembers => self.aliases.get_all_member_names().into(),
+            };
+            let annotation = IDEAnnotation::PathAutocompleteInfo(Box::new(info));
+            context.env.add_ide_annotation(loc, annotation)
         }
     }
 }
