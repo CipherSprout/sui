@@ -167,7 +167,7 @@ pub struct LocalFaucetClient {
 }
 
 impl LocalFaucetClient {
-    fn new(simple_faucet: Arc<SimpleFaucet>) -> Self {
+    pub fn new(simple_faucet: Arc<SimpleFaucet>) -> Self {
         info!("Use local faucet");
         Self { simple_faucet }
     }

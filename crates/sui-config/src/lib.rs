@@ -52,6 +52,24 @@ pub fn sui_config_dir() -> Result<PathBuf, anyhow::Error> {
     })
 }
 
+/// Check if the genesis blob exists in the given directory or the default directory.
+pub fn genesis_blob_exists(config_dir: Option<PathBuf>) -> bool {
+    match config_dir {
+        Some(dir) => dir.join(SUI_GENESIS_FILENAME).exists(),
+        None => match std::env::var_os("SUI_CONFIG_DIR") {
+            Some(config_env) => Path::new(&config_env).join(SUI_GENESIS_FILENAME).exists(),
+            None => match dirs::home_dir() {
+                Some(v) => Path::new(&v)
+                    .join(SUI_DIR)
+                    .join(SUI_CONFIG_DIR)
+                    .join(SUI_GENESIS_FILENAME)
+                    .exists(),
+                None => false,
+            },
+        },
+    }
+}
+
 pub fn validator_config_file(address: Multiaddr, i: usize) -> String {
     multiaddr_to_filename(address).unwrap_or(format!("validator-config-{}.yaml", i))
 }

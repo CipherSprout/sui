@@ -13,6 +13,7 @@ pub mod genesis_inspector;
 pub mod key_identity;
 pub mod keytool;
 pub mod shell;
+pub mod faucet;
 pub mod sui_commands;
 pub mod validator_commands;
 mod verifier_meter;
