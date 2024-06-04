@@ -73,12 +73,12 @@ pub struct DotAutocompleteInfo {
 
 #[derive(Default, Debug, Clone)]
 pub struct AliasAutocompleteInfo {
-    /// Members that are valid autocompletes
-    pub members: BTreeSet<(Symbol, E::ModuleIdent, Name)>,
-    /// Modules that are valid autocompletes
-    pub modules: BTreeSet<(Symbol, E::ModuleIdent)>,
     /// Numerical addresses that are valid autocompletes
     pub addresses: BTreeSet<(Symbol, NumericalAddress)>,
+    /// Modules that are valid autocompletes
+    pub modules: BTreeSet<(Symbol, E::ModuleIdent)>,
+    /// Members that are valid autocompletes
+    pub members: BTreeSet<(Symbol, E::ModuleIdent, Name)>,
     /// Type parameters that are valid autocompletes
     pub type_params: BTreeSet<Symbol>,
 }
@@ -167,6 +167,12 @@ impl IntoIterator for IDEInfo {
 
     fn into_iter(self) -> Self::IntoIter {
         self.annotations.into_iter()
+    }
+}
+
+impl AliasAutocompleteInfo {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 

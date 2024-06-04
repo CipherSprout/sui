@@ -848,11 +848,48 @@ pub struct LegacyPathExpander {
     old_alias_maps: Vec<legacy_aliases::OldAliasMap>,
 }
 
+enum LegacyPositionKind {
+    Address,
+    Module,
+    Member,
+}
+
 impl LegacyPathExpander {
     pub fn new() -> LegacyPathExpander {
         LegacyPathExpander {
             aliases: legacy_aliases::AliasMap::new(),
             old_alias_maps: vec![],
+        }
+    }
+
+    fn ide_autocomplete_suggestion(
+        &mut self,
+        context: &mut DefnContext,
+        position_kind: LegacyPositionKind,
+        loc: Loc,
+    ) {
+        if context.env.ide_mode() {
+            let mut info = AliasAutocompleteInfo::new();
+
+            match position_kind {
+                LegacyPositionKind::Address => {
+                    for (name, addr) in context.named_address_mapping.unwrap().iter() {
+                        info.addresses.insert((*name, *addr));
+                    }
+                }
+                LegacyPositionKind::Module => {
+                    for (_, name, (_, mident)) in self.aliases.modules.iter() {
+                        info.modules.insert((*name, *mident));
+                    }
+                }
+                LegacyPositionKind::Member => {
+                    for (_, name, (_, (mident, member))) in self.aliases.members.iter() {
+                        info.members.insert((*name, *mident, *member));
+                    }
+                }
+            }
+            let annotation = IDEAnnotation::PathAutocompleteInfo(Box::new(info));
+            context.env.add_ide_annotation(loc, annotation)
         }
     }
 }
@@ -899,6 +936,7 @@ impl PathExpander for LegacyPathExpander {
                 PV::ModuleAccess(sp!(ident_loc, single_entry!(name, tyargs, is_macro)))
                     if self.aliases.module_alias_get(&name).is_some() =>
                 {
+                    self.ide_autocomplete_suggestion(context, LegacyPositionKind::Module, loc);
                     ice_assert!(context.env, tyargs.is_none(), loc, "Found tyargs");
                     ice_assert!(context.env, is_macro.is_none(), loc, "Found macro");
                     let sp!(_, mident_) = self.aliases.module_alias_get(&name).unwrap();
@@ -990,6 +1028,7 @@ impl PathExpander for LegacyPathExpander {
                 if access == Access::Type {
                     ice_assert!(context.env, is_macro.is_none(), loc, "Found macro");
                 }
+                self.ide_autocomplete_suggestion(context, LegacyPositionKind::Member, loc);
                 let access = match self.aliases.member_alias_get(&name) {
                     Some((mident, mem)) => EN::ModuleAccess(mident, mem),
                     None => EN::Name(name),
@@ -999,6 +1038,7 @@ impl PathExpander for LegacyPathExpander {
             (Access::Term, single_entry!(name, tyargs, is_macro))
                 if is_valid_datatype_or_constant_name(name.value.as_str()) =>
             {
+                self.ide_autocomplete_suggestion(context, LegacyPositionKind::Member, loc);
                 let access = match self.aliases.member_alias_get(&name) {
                     Some((mident, mem)) => EN::ModuleAccess(mident, mem),
                     None => EN::Name(name),
@@ -1040,15 +1080,13 @@ impl PathExpander for LegacyPathExpander {
                         return None;
                     }
                     // Others
-                    (sp!(_, LN::Name(n1)), [n2]) => match self.aliases.module_alias_get(n1) {
-                        None => {
-                            context.env.add_diag(diag!(
-                                NameResolution::UnboundModule,
-                                (n1.loc, format!("Unbound module alias '{}'", n1))
-                            ));
-                            return None;
-                        }
-                        Some(mident) => {
+                    (sp!(_, LN::Name(n1)), [n2]) => {
+                        self.ide_autocomplete_suggestion(
+                            context,
+                            LegacyPositionKind::Module,
+                            n1.loc,
+                        );
+                        if let Some(mident) = self.aliases.module_alias_get(n1) {
                             let n2_name = n2.name;
                             let (tyargs, is_macro) = if !(path.has_tyargs_last()) {
                                 let mut diag = diag!(
@@ -1068,9 +1106,20 @@ impl PathExpander for LegacyPathExpander {
                                 tyargs,
                                 is_macro.copied(),
                             )
+                        } else {
+                            context.env.add_diag(diag!(
+                                NameResolution::UnboundModule,
+                                (n1.loc, format!("Unbound module alias '{}'", n1))
+                            ));
+                            return None;
                         }
-                    },
+                    }
                     (ln, [n2, n3]) => {
+                        self.ide_autocomplete_suggestion(
+                            context,
+                            LegacyPositionKind::Address,
+                            ln.loc,
+                        );
                         let ident_loc = make_loc(
                             ln.loc.file_hash(),
                             ln.loc.start() as usize,
@@ -1098,7 +1147,12 @@ impl PathExpander for LegacyPathExpander {
                         context.env.add_diag(diag);
                         return None;
                     }
-                    (_ln, [_n1, _n2, ..]) => {
+                    (ln, [_n1, _n2, ..]) => {
+                        self.ide_autocomplete_suggestion(
+                            context,
+                            LegacyPositionKind::Address,
+                            ln.loc,
+                        );
                         let mut diag = diag!(Syntax::InvalidName, (loc, "Too many name segments"));
                         diag.add_note("Names may only have 0, 1, or 2 segments separated by '::'");
                         context.env.add_diag(diag);
