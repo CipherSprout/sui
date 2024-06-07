@@ -2,7 +2,7 @@
 title: Connect to a Local Network
 ---
 
-Use a Sui local network to test your dApps against the latest changes to Sui, and to prepare for the next Sui release to the Devnet or Testnet network. To set up a local network, Sui provides the `sui-test-validator` binary. The `sui-test-validator` starts a local network that includes a Sui Full node, a Sui validator, and a Sui faucet. You can use the included faucet to get test SUI to use on the local network.
+Use a Sui local network to test your dApps against the latest changes to Sui, and to prepare for the next Sui release to the Devnet or Testnet network. To set up a local network, Sui provides the `sui start` command, which starts a local network. There are several services that can be started when using `sui start`, such as an indexer, a faucet, or a local instance of the GraphQL service (including the online GraphiQL IDE). You can use the included faucet to get test SUI to use on the local network.
 
 If you haven't already, you need to [install Sui](./sui-install.mdx) on your system.
 
@@ -11,20 +11,25 @@ If you haven't already, you need to [install Sui](./sui-install.mdx) on your sys
 To start the local network, run the following command from your `sui` root folder.
 
 ```bash
-RUST_LOG="off,sui_node=info" cargo run --bin sui-test-validator
+RUST_LOG="off,sui_node=info" sui start --with-faucet --dont-persist-state
 ```
 
-The command starts the `sui-test-validator`. The `RUST_LOG`=`off,sui_node=info` turns off logging for all components except
-sui-node. If you want to see more detailed logs, you can remove `RUST_LOG` from the command.
+The command
+* starts the Sui CLI binary
+* calls the `sui start` command, passing two flags `--with-faucet` to start a faucet service, and `--dont-persist-state` to generate a new genesis and not persist the local network
+* instructs Rust to set specific logging through the `RUST_LOG`=`off,sui_node=info` variable, which turns off logging for all components except sui-node. If you want to see more detailed logs, you can remove `RUST_LOG` from the command.
 
-**Important:** Each time you start the `sui-test-validator`, the network starts as a new network with no previous data. The local network is not persistent.
+**Important:** Each time you start the network by passing `--dont-persist-state`, the network starts as a new network with no previous data. The local network is not persistent.
 
-To customize your local Sui network, such as changing the port used, include additional parameters in the command to start `sui-test-validator`:
+To customize your local Sui network, such as changing the port used, include additional parameters in the `sui start` command:
 
 ```
 OPTIONS:
         --epoch-duration-ms <EPOCH_DURATION_MS>
-            The duration for epochs (defaults to one minute) [default: 60000]
+         Set the epoch duration.
+
+         When this value is not set and the `--dont-persist-state` flag is passed, the epoch
+         duration will be set to 60 seconds.
 
         --faucet-port <FAUCET_PORT>
             Port to start the Sui faucet on [default: 9123]
@@ -33,7 +38,7 @@ OPTIONS:
             Port to start the Fullnode RPC server on [default: 9000]
 ```
 
-Use `sui-test-validator --help` to see these options in your console.
+Use `sui start --help` to see these options in your console.
 
 ### Access your local Full node
 

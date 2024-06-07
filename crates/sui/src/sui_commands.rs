@@ -135,7 +135,10 @@ pub enum SuiCommand {
         #[clap(long, default_value = "postgrespw")]
         pg_password: String,
 
-        /// The duration for epochs
+        /// Set the epoch duration.
+        ///
+        /// When this value is not set and the `--dont-persist-state` flag is passed, the epoch
+        /// duration will be set to 60 seconds.
         #[clap(long)]
         epoch_duration_ms: Option<u64>,
 
@@ -564,9 +567,8 @@ async fn start(
         if let Some(config) = config.clone() {
             swarm_builder = swarm_builder.dir(config);
         }
-        if let Some(epoch_duration_ms) = epoch_duration_ms {
-            swarm_builder = swarm_builder.with_epoch_duration_ms(epoch_duration_ms);
-        }
+        swarm_builder =
+            swarm_builder.with_epoch_duration_ms(epoch_duration_ms.unwrap_or_else(|| 60000));
     } else {
         // load from config dir that was passed, or generate a new genesis if there is no config
         // dir passed and there is no config_dir in the default location
