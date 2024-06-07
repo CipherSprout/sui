@@ -169,6 +169,22 @@ pub async fn verify_package(
         Network::Localnet => LOCALNET_URL,
     };
     let client = SuiClientBuilder::default().build(network_url).await?;
+    let chain_id = client.read_api().get_chain_identifier().await?;
+
+    let mut config = resolve_lock_file_path(
+        MoveBuildConfig::default(),
+        Some(package_path.as_ref().to_path_buf()),
+    )?;
+    config.lint_flag = LintFlag::LEVEL_NONE;
+    config.silence_warnings = true;
+    let build_config = BuildConfig {
+        config,
+        run_bytecode_verifier: false, /* no need to run verifier if code is on-chain */
+        print_diags_to_stderr: false,
+        chain_id: Some(chain_id),
+    };
+    let compiled_package = build_config.build(package_path.as_ref().to_path_buf())?;
+
     BytecodeSourceVerifier::new(client.read_api())
         .verify_package(
             &compiled_package,
