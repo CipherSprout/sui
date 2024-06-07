@@ -108,44 +108,43 @@ pub enum SuiCommand {
         #[clap(long)]
         with_indexer: bool,
 
-        /// Port to start the Fullnode RPC server on. By default, the host is 127.0.0.1
-        #[clap(long)]
-        fullnode_port: Option<u16>,
+        /// Port to start the Fullnode RPC server on. Default port is 9000.
+        #[clap(long, default_value = "9000")]
+        fullnode_port: u16,
 
-        /// Port to start the SUI faucet on.
-        #[clap(long)]
-        faucet_port: Option<u16>,
+        /// Port to start the faucet on. Default port is 9123.
+        #[clap(long, default_value = "9123")]
+        faucet_port: u16,
 
-        /// Host to start the GraphQl server on
+        /// Host to start the GraphQl server on. Default host is 127.0.0.1.
         #[clap(long, default_value = "127.0.0.1")]
         graphql_host: String,
 
-        /// Port to start the GraphQl server on
-        #[clap(long)]
-        graphql_port: Option<u16>,
+        /// Port to start the GraphQl server on. Default port is 8000.
+        #[clap(long, default_value = "8000")]
+        graphql_port: u16,
 
-        /// Port to start the Indexer RPC server on.
-        #[clap(long)]
-        indexer_port: Option<u16>,
+        /// Port to start the Indexer RPC server on. Default port is 9124.
+        #[clap(long, default_value = "9124")]
+        indexer_port: u16,
 
-        /// Port for the Indexer Postgres DB
-        /// 5432 is the default port for postgres on Mac
+        /// Port for the Indexer Postgres DB. Default port is 5432.
         #[clap(long, default_value = "5432")]
         pg_port: u16,
 
-        /// Hostname for the Indexer Postgres DB
+        /// Hostname for the Indexer Postgres DB. Default host is localhost.
         #[clap(long, default_value = "localhost")]
         pg_host: String,
 
-        /// DB name for the Indexer Postgres DB
+        /// DB name for the Indexer Postgres DB. Default DB name is sui_indexer.
         #[clap(long, default_value = "sui_indexer")]
         pg_db_name: String,
 
-        /// DB username for the Indexer Postgres DB
+        /// DB username for the Indexer Postgres DB. Default username is postgres.
         #[clap(long, default_value = "postgres")]
         pg_user: String,
 
-        /// DB password for the Indexer Postgres DB
+        /// DB password for the Indexer Postgres DB. Default password is postgrespw.
         #[clap(long, default_value = "postgrespw")]
         pg_password: String,
 
@@ -527,12 +526,12 @@ async fn start(
     with_indexer: bool,
     dont_persist_state: bool,
     epoch_duration_ms: Option<u64>,
-    indexer_port: Option<u16>,
-    fullnode_port: Option<u16>,
+    indexer_port: u16,
+    fullnode_port: u16,
     no_full_node: bool,
     graphql_host: String,
-    graphql_port: Option<u16>,
-    faucet_port: Option<u16>,
+    graphql_port: u16,
+    faucet_port: u16,
     pg_host: String,
     pg_port: u16,
     pg_db_name: String,
@@ -554,6 +553,16 @@ async fn start(
             there is no genesis configuration in the default Sui configuration folder or the given \
             config_dir.",
         );
+    }
+
+    if with_indexer {
+        tracing::info!("Starting the indexer service at 0.0.0.0:{indexer_port}");
+    }
+    if with_graphql {
+        tracing::info!("Starting the GraphQL service at {graphql_host}:{graphql_port}");
+    }
+    if with_faucet {
+        tracing::info!("Starting the faucet service at 127.0.0.1:{faucet_port}");
     }
 
     let data_ingestion_path = tempdir()?.into_path();
@@ -606,9 +615,7 @@ async fn start(
     }
 
     let mut fullnode_url = sui_config::node::default_json_rpc_address();
-    if let Some(fullnode_port) = fullnode_port {
-        fullnode_url.set_port(fullnode_port);
-    }
+    fullnode_url.set_port(fullnode_port);
 
     if no_full_node {
         swarm_builder = swarm_builder.with_fullnode_count(0);
@@ -633,7 +640,7 @@ async fn start(
         tracing::warn!("Cannot start the indexer without a fullnode, so will skip the indexer and graphql if requested");
     } else {
         if with_indexer {
-            let indexer_address = format!("0.0.0.0:{}", indexer_port.unwrap_or_else(|| 9124));
+            let indexer_address = format!("0.0.0.0:{}", indexer_port);
             // Start in writer mode
             start_test_indexer::<diesel::PgConnection>(
                 Some(pg_address.clone()),
@@ -657,7 +664,7 @@ async fn start(
 
         if with_graphql {
             let graphql_connection_config = ConnectionConfig::new(
-                Some(graphql_port.unwrap_or(8000)),
+                Some(graphql_port),
                 Some(graphql_host),
                 Some(pg_address),
                 None,
@@ -690,7 +697,7 @@ async fn start(
         let local_faucet_client = Arc::new(LocalFaucetClient::new(simple_faucet));
         let app_state = Arc::new(AppState::new(local_faucet_client));
 
-        start_faucet(app_state, faucet_port.unwrap_or(9123)).await?;
+        start_faucet(app_state, faucet_port).await?;
     }
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
