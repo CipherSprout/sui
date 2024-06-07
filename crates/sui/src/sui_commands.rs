@@ -62,25 +62,12 @@ pub enum SuiCommand {
     /// Start a local network in two modes: saving state between re-runs and not saving state
     /// between re-runs. Please use (--help) to see the full description.
     ///
-    /// First option: from genesis with saved state, and will keep state whenever this command is
-    /// called! To run in this mode, do not provide any other arguments except `no_full_node` or
-    /// `config_dir`.
+    /// By default, sui start will start a local network from the genesis blob that exists in
+    /// the Sui config default dir or in the config_dir that was passed. If the default directory
+    /// does not exist and the config_dir is not passed, it will generate a new default directory,
+    /// generate the genesis blob, and start the network.
     ///
-    ///  * If `config_dir` is not provided and there is no genesis config in the default config
-    ///    directory (~/.sui/sui_config), it will generate a genesis and start the network with a
-    ///    fullnode, four validators, and five local wallet addresses, with each address having
-    ///    150M SUI across five coins.
-    ///  * If `config_dir` is not provided and there is a genesis config in the default config
-    ///    directory (~/.sui/sui_config), it will start the network with the genesis config.
-    ///  * If the `--config-dir` argument is provided, it will start the network with the genesis
-    ///    config provided.
-    ///
-    /// Second option: without keeping state between re-runs. This option is useful for local
-    /// testing, and it allows the user to start an indexer, a GraphQL service, a faucet. For
-    /// GraphQL it does require a local running instance of the Postgres database (or to provide
-    /// the host for a Postgres DB).
-    /// To run this option, provide one of the arguments: `--fullnode-rpc-port`, `--faucet-port`,
-    /// `--graphql-port`, `--indexer-rpc-port`.
+    /// Note that if you want to start an indexer, Postgres DB is required.
     #[clap(name = "start")]
     Start {
         /// Config directory that will be used to store network config, node db, keystore
@@ -189,7 +176,7 @@ pub enum SuiCommand {
         benchmark_ips: Option<Vec<String>>,
         #[clap(
             long,
-            help = "Creates an extra faucet configuration for sui-test-validator persisted runs."
+            help = "Creates an extra faucet configuration for sui persisted runs."
         )]
         with_faucet: bool,
     },

@@ -3,15 +3,15 @@
 echo "sui-test-validator binary has been deprecated in favor of sui start, which is a more powerful command that allows you to start the local network with more options.
 This script offers backward compatibiltiy, but ideally, you should migrate to sui start instead. Use sui start --help to see all the flags and options. 
 
-To recreate the basic functionality of sui-test-validator, you must use the following options:
+To recreate the exact basic functionality of sui-test-validator, you must use the following options:
   * --with-faucet --> to start the faucet server on the default host and port
   * --dont-persist-state --> to start the local network without persisting the state
 
 You can also use the following options to start the local network with more features:
-  * --with-indexer --> to start the indexer on the default host and port
+  * --with-indexer --> to start the indexer on the default host and port. Note that this requires a Postgres database to be running
   * --with-graphql --> to start the GraphQL server on the default host and port"
 
-# Check if a specific argument is passed
+# In sui-test-validator the graphql is started by passing the graphql-port argument
 graphql_port="--graphql-port"
 start_graphql=false
 
@@ -33,5 +33,4 @@ if  [ "$start_graphql" = true ]; then
 fi
 
 $cmd "$@"
-
 
