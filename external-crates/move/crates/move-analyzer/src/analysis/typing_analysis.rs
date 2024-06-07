@@ -4,9 +4,8 @@
 use crate::{
     compiler_info::CompilerInfo,
     symbols::{
-        add_fun_use_def, add_struct_use_def, def_info_to_type_def_loc,
-        expansion_mod_ident_to_map_key, type_def_loc, DefInfo, DefLoc, LocalDef, ModuleDefs,
-        UseDef, UseDefMap, UseLoc,
+        add_member_use_def, def_info_to_type_def_loc, expansion_mod_ident_to_map_key, type_def_loc,
+        DefInfo, DefLoc, FieldDef, LocalDef, MemberDefInfo, ModuleDefs, UseDef, UseDefMap, UseLoc,
     },
     utils::{get_start_position_opt, ignored_function, to_lsp_position},
 };
@@ -16,7 +15,7 @@ use move_compiler::{
     diagnostics::{self as diag, PositionInfo},
     expansion::ast::{self as E, ModuleIdent},
     naming::ast as N,
-    parser::ast as P,
+    parser::ast::{self as P},
     shared::{ide::MacroCallInfo, Identifier, Name},
     typing::{
         ast as T,
@@ -286,7 +285,7 @@ impl TypingAnalysisContext<'_> {
 
         let mut use_defs = std::mem::replace(&mut self.use_defs, UseDefMap::new());
         let mut refs = std::mem::take(self.references);
-        let result = add_fun_use_def(
+        let result = add_member_use_def(
             fun_def_name,
             self.mod_outer_defs,
             self.files(),
@@ -309,12 +308,7 @@ impl TypingAnalysisContext<'_> {
     }
 
     /// Add use of a datatype identifier
-    fn add_datatype_use_def(
-        &mut self,
-        mident: &ModuleIdent,
-        use_name: &P::DatatypeName,
-        use_pos: &Loc,
-    ) {
+    fn add_datatype_use_def(&mut self, mident: &ModuleIdent, use_name: &P::DatatypeName) {
         if self.traverse_only {
             return;
         }
@@ -343,14 +337,15 @@ impl TypingAnalysisContext<'_> {
 
         let mut use_defs = std::mem::replace(&mut self.use_defs, UseDefMap::new());
         let mut refs = std::mem::take(self.references);
-        add_struct_use_def(
+        add_member_use_def(
+            &use_name.value(),
             self.mod_outer_defs,
             self.files(),
             self.file_mapping(),
             mod_ident_str,
             mod_defs,
             &use_name.value(),
-            use_pos,
+            &use_name.loc(),
             &mut refs,
             self.def_info,
             &mut use_defs,
@@ -361,23 +356,61 @@ impl TypingAnalysisContext<'_> {
     }
 
     /// Add a type for a struct field given its type
-    fn add_field_type_use_def(&mut self, field_type: &N::Type, use_name: &Symbol, use_pos: &Loc) {
+    fn add_struct_field_type_use_def(
+        &mut self,
+        field_type: &N::Type,
+        use_name: &Symbol,
+        use_pos: &Loc,
+    ) {
         let sp!(_, typ) = field_type;
         match typ {
-            N::Type_::Ref(_, t) => self.add_field_type_use_def(t, use_name, use_pos),
+            N::Type_::Ref(_, t) => self.add_struct_field_type_use_def(t, use_name, use_pos),
             N::Type_::Apply(
                 _,
                 sp!(_, N::TypeName_::ModuleType(sp!(_, mod_ident), struct_name)),
                 _,
             ) => {
-                self.add_field_use_def(mod_ident, &struct_name.value(), use_name, use_pos);
+                self.add_struct_field_use_def(mod_ident, &struct_name.value(), use_name, use_pos);
             }
             _ => (),
         }
     }
 
+    fn add_field_use_def_internal(
+        &mut self,
+        mod_ident_str: String,
+        field_defs: &[FieldDef],
+        use_name: &Symbol,
+        use_loc: &Loc,
+        use_pos: &Position,
+    ) {
+        for fdef in field_defs {
+            if fdef.name == *use_name {
+                let def_fhash = self.mod_outer_defs.get(&mod_ident_str).unwrap().fhash;
+                let field_info = self
+                    .def_info
+                    .get(&DefLoc::new(def_fhash, fdef.start))
+                    .unwrap();
+                let ident_type_def_loc = def_info_to_type_def_loc(self.mod_outer_defs, field_info);
+                self.use_defs.insert(
+                    use_pos.line,
+                    UseDef::new(
+                        self.references,
+                        self.alias_lengths,
+                        use_loc.file_hash(),
+                        *use_pos,
+                        def_fhash,
+                        fdef.start,
+                        use_name,
+                        ident_type_def_loc,
+                    ),
+                );
+            }
+        }
+    }
+
     /// Add use of a struct field identifier
-    fn add_field_use_def(
+    fn add_struct_field_use_def(
         &mut self,
         module_ident: &E::ModuleIdent_,
         struct_name: &Symbol,
@@ -395,32 +428,103 @@ impl TypingAnalysisContext<'_> {
         let Some(mod_defs) = self.mod_outer_defs.get(&mod_ident_str) else {
             return;
         };
-        if let Some(def) = mod_defs.structs.get(struct_name) {
-            for fdef in &def.field_defs {
-                if fdef.name == *use_name {
-                    let def_fhash = self.mod_outer_defs.get(&mod_ident_str).unwrap().fhash;
-                    let field_info = self
-                        .def_info
-                        .get(&DefLoc::new(def_fhash, fdef.start))
-                        .unwrap();
-                    let ident_type_def_loc =
-                        def_info_to_type_def_loc(self.mod_outer_defs, field_info);
-                    self.use_defs.insert(
-                        name_start.line,
-                        UseDef::new(
-                            self.references,
-                            self.alias_lengths,
-                            use_pos.file_hash(),
-                            name_start,
-                            def_fhash,
-                            fdef.start,
-                            use_name,
-                            ident_type_def_loc,
-                        ),
-                    );
-                }
-            }
+        // get the struct
+        let Some(def) = mod_defs.structs.get(struct_name) else {
+            return;
+        };
+        // get variant's fields
+        let MemberDefInfo::Struct {
+            field_defs,
+            positional: _,
+        } = &def.info
+        else {
+            return;
+        };
+        self.add_field_use_def_internal(mod_ident_str, field_defs, use_name, use_pos, &name_start);
+    }
+
+    fn add_variant_use_def(
+        &mut self,
+        module_ident: &mut E::ModuleIdent,
+        enum_name: &mut P::DatatypeName,
+        variant_name: &mut P::VariantName,
+    ) {
+        let use_name = variant_name.value();
+        let use_pos = variant_name.loc();
+        if self.traverse_only {
+            return;
         }
+        let mod_ident_str = expansion_mod_ident_to_map_key(&module_ident.value);
+        let Some(name_start) = self.lsp_start_position_opt(&use_pos) else {
+            debug_assert!(false);
+            return;
+        };
+        // get module info
+        let Some(mod_defs) = self.mod_outer_defs.get(&mod_ident_str) else {
+            return;
+        };
+        // get the enum
+        let Some(def) = mod_defs.enums.get(&enum_name.value()) else {
+            return;
+        };
+        // get variants info
+        let MemberDefInfo::Enum { variants_info } = &def.info else {
+            return;
+        };
+        // get variant's fields
+        let Some((vpos, _, _)) = variants_info.get(&use_name) else {
+            return;
+        };
+
+        self.use_defs.insert(
+            name_start.line,
+            UseDef::new(
+                self.references,
+                self.alias_lengths,
+                use_pos.file_hash(),
+                name_start,
+                mod_defs.fhash,
+                *vpos,
+                &use_name,
+                None,
+            ),
+        );
+    }
+
+    /// Add use of a variant field identifier
+    fn add_variant_field_use_def(
+        &mut self,
+        module_ident: &E::ModuleIdent_,
+        enum_name: &Symbol,
+        variant_name: &Symbol,
+        use_name: &Symbol,
+        use_pos: &Loc,
+    ) {
+        if self.traverse_only {
+            return;
+        }
+        let mod_ident_str = expansion_mod_ident_to_map_key(module_ident);
+        let Some(name_start) = self.lsp_start_position_opt(use_pos) else {
+            debug_assert!(false);
+            return;
+        };
+        // get module info
+        let Some(mod_defs) = self.mod_outer_defs.get(&mod_ident_str) else {
+            return;
+        };
+        // get the enum
+        let Some(def) = mod_defs.enums.get(enum_name) else {
+            return;
+        };
+        // get variants info
+        let MemberDefInfo::Enum { variants_info } = &def.info else {
+            return;
+        };
+        // get variant's fields
+        let Some((_, field_defs, _)) = variants_info.get(variant_name) else {
+            return;
+        };
+        self.add_field_use_def_internal(mod_ident_str, field_defs, use_name, use_pos, &name_start);
     }
 
     fn process_module_call(
@@ -544,24 +648,99 @@ impl<'a> TypingVisitorContext for TypingAnalysisContext<'a> {
 
     fn visit_enum_custom(
         &mut self,
-        _module: move_compiler::expansion::ast::ModuleIdent,
-        _enum_name: P::DatatypeName,
-        _edef: &mut N::EnumDefinition,
+        module: move_compiler::expansion::ast::ModuleIdent,
+        enum_name: P::DatatypeName,
+        edef: &mut N::EnumDefinition,
     ) -> bool {
         self.reset_for_module_member();
-        // TODO: support enums
-        false
+        let file_hash = enum_name.loc().file_hash();
+        // enter self-definition for enum name (unwrap safe - done when inserting def)
+        let name_start = self.lsp_start_position(&enum_name.loc());
+        let enum_info = self
+            .def_info
+            .get(&DefLoc::new(file_hash, name_start))
+            .unwrap();
+        let enum_type_def = def_info_to_type_def_loc(self.mod_outer_defs, enum_info);
+        self.use_defs.insert(
+            name_start.line,
+            UseDef::new(
+                self.references,
+                self.alias_lengths,
+                file_hash,
+                name_start,
+                file_hash,
+                name_start,
+                &enum_name.value(),
+                enum_type_def,
+            ),
+        );
+        for etp in &edef.type_parameters {
+            self.add_type_param(&etp.param);
+        }
+
+        for (vname, vdef) in edef.variants.key_cloned_iter_mut() {
+            self.visit_variant(&module, &enum_name, vname, vdef);
+        }
+        true
     }
 
     fn visit_variant_custom(
         &mut self,
         _module: &move_compiler::expansion::ast::ModuleIdent,
         _enum_name: &P::DatatypeName,
-        _variant_name: P::VariantName,
-        _vdef: &mut N::VariantDefinition,
+        variant_name: P::VariantName,
+        vdef: &mut N::VariantDefinition,
     ) -> bool {
-        // TODO: support enums
-        false
+        let file_hash = variant_name.loc().file_hash();
+        // enter self-definition for variant name (unwrap safe - done when inserting def)
+        let vname_start = self.lsp_start_position(&variant_name.loc());
+        let variant_info = self
+            .def_info
+            .get(&DefLoc::new(file_hash, vname_start))
+            .unwrap();
+        let vtype_def = def_info_to_type_def_loc(self.mod_outer_defs, variant_info);
+        self.use_defs.insert(
+            vname_start.line,
+            UseDef::new(
+                self.references,
+                self.alias_lengths,
+                file_hash,
+                vname_start,
+                file_hash,
+                vname_start,
+                &variant_name.value(),
+                vtype_def,
+            ),
+        );
+        if let N::VariantFields::Defined(positional, fields) = &mut vdef.fields {
+            for (fpos, fname, (_, ty)) in fields {
+                self.visit_type(None, ty);
+                if !*positional {
+                    // enter self-definition for field name (unwrap safe - done when inserting def),
+                    // but only if the fields are named (same as for structs - see comment there
+                    // for more detailed explanation)
+                    let start = self.lsp_start_position(&fpos);
+                    let field_info = DefInfo::Type(ty.clone());
+                    let ident_type_def_loc =
+                        def_info_to_type_def_loc(self.mod_outer_defs, &field_info);
+                    self.use_defs.insert(
+                        start.line,
+                        UseDef::new(
+                            self.references,
+                            self.alias_lengths,
+                            fpos.file_hash(),
+                            start,
+                            fpos.file_hash(),
+                            start,
+                            fname,
+                            ident_type_def_loc,
+                        ),
+                    );
+                }
+            }
+        }
+
+        true
     }
 
     fn visit_constant(
@@ -684,18 +863,31 @@ impl<'a> TypingVisitorContext for TypingAnalysisContext<'a> {
                         LValueKind::Assign => self.add_local_use_def(&var.value.name, &var.loc),
                     }
                 }
-                T::LValue_::Unpack(mident, name, _tyargs, fields)
-                | T::LValue_::BorrowUnpack(_, mident, name, _tyargs, fields) => {
+                T::LValue_::Unpack(mident, name, tyargs, fields)
+                | T::LValue_::BorrowUnpack(_, mident, name, tyargs, fields) => {
                     for_unpack = true;
-                    self.add_datatype_use_def(mident, name, &name.loc());
+                    self.add_datatype_use_def(mident, name);
+                    tyargs.iter_mut().for_each(|t| self.visit_type(None, t));
                     for (fpos, fname, (_, (_, lvalue))) in fields {
-                        self.add_field_use_def(&mident.value, &name.value(), fname, &fpos);
+                        self.add_struct_field_use_def(&mident.value, &name.value(), fname, &fpos);
                         lvalue_queue.push(lvalue);
                     }
                 }
-                T::LValue_::UnpackVariant(_, _, _, _, _)
-                | T::LValue_::BorrowUnpackVariant(_, _, _, _, _, _) => {
-                    debug_assert!(false, "Enums are not supported by move analyzser.");
+                T::LValue_::UnpackVariant(mident, name, vname, tyargs, fields)
+                | T::LValue_::BorrowUnpackVariant(_, mident, name, vname, tyargs, fields) => {
+                    for_unpack = true;
+                    self.add_datatype_use_def(mident, name);
+                    tyargs.iter_mut().for_each(|t| self.visit_type(None, t));
+                    for (fpos, fname, (_, (_, lvalue))) in fields {
+                        self.add_variant_field_use_def(
+                            &mident.value,
+                            &name.value(),
+                            &vname.value(),
+                            fname,
+                            &fpos,
+                        );
+                        lvalue_queue.push(lvalue);
+                    }
                 }
             }
         }
@@ -750,27 +942,60 @@ impl<'a> TypingVisitorContext for TypingAnalysisContext<'a> {
                     true
                 }
                 TE::Pack(mident, name, tyargs, fields) => {
-                    // add use of the struct name
-                    visitor.add_datatype_use_def(mident, name, &name.loc());
+                    // add use of the datatype name
+                    visitor.add_datatype_use_def(mident, name);
                     for (fpos, fname, (_, (_, init_exp))) in fields.iter_mut() {
                         // add use of the field name
-                        visitor.add_field_use_def(&mident.value, &name.value(), fname, &fpos);
+                        visitor.add_struct_field_use_def(
+                            &mident.value,
+                            &name.value(),
+                            fname,
+                            &fpos,
+                        );
                         // add field initialization expression
                         visitor.visit_exp(init_exp);
                     }
                     // add type params
-                    for t in tyargs.iter_mut() {
-                        visitor.visit_type(Some(exp_loc), t);
-                    }
+                    tyargs
+                        .iter_mut()
+                        .for_each(|t| visitor.visit_type(Some(exp_loc), t));
                     true
                 }
                 TE::Borrow(_, exp, field) => {
                     visitor.visit_exp(exp);
-                    visitor.add_field_type_use_def(&exp.ty, &field.value(), &field.loc());
+                    visitor.add_struct_field_type_use_def(&exp.ty, &field.value(), &field.loc());
                     true
                 }
-                TE::PackVariant(_, _, _, _, _) => false, // TODO support these
-                TE::VariantMatch(_, _, _) => false,      // TODO: support these
+                TE::PackVariant(mident, name, vname, tyargs, fields) => {
+                    // add use of the datatype name
+                    visitor.add_datatype_use_def(mident, name);
+                    for (fpos, fname, (_, (_, init_exp))) in fields.iter_mut() {
+                        // add use of the field name
+                        visitor.add_variant_field_use_def(
+                            &mident.value,
+                            &name.value(),
+                            &vname.value(),
+                            fname,
+                            &fpos,
+                        );
+                        // add field initialization expression
+                        visitor.visit_exp(init_exp);
+                    }
+                    // add type params
+                    tyargs
+                        .iter_mut()
+                        .for_each(|t| visitor.visit_type(Some(exp_loc), t));
+                    true
+                }
+                TE::VariantMatch(e, (mident, enum_name), v) => {
+                    visitor.visit_exp(e);
+                    visitor.add_datatype_use_def(mident, enum_name);
+                    v.iter_mut().for_each(|(vname, e)| {
+                        visitor.add_variant_use_def(mident, enum_name, vname);
+                        visitor.visit_exp(e);
+                    });
+                    true
+                }
                 TE::Match(_, _) => {
                     // These should be gone after match compilation.
                     debug_assert!(false);
@@ -873,7 +1098,7 @@ impl<'a> TypingVisitorContext for TypingAnalysisContext<'a> {
             }
             N::Type_::Apply(_, sp!(_, type_name), tyargs) => {
                 if let N::TypeName_::ModuleType(mod_ident, struct_name) = type_name {
-                    self.add_datatype_use_def(mod_ident, struct_name, &struct_name.loc());
+                    self.add_datatype_use_def(mod_ident, struct_name);
                 } // otherwise nothing to be done for other type names
                 for t in tyargs.iter_mut() {
                     self.visit_type(exp_loc, t);
@@ -904,7 +1129,7 @@ impl<'a> TypingVisitorContext for TypingAnalysisContext<'a> {
         for uses in resolved.values() {
             for (use_loc, use_name, u) in uses {
                 if let N::TypeName_::ModuleType(mod_ident, struct_name) = u.tname.value {
-                    self.add_datatype_use_def(&mod_ident, &struct_name, &struct_name.loc());
+                    self.add_datatype_use_def(&mod_ident, &struct_name);
                 } // otherwise nothing to be done for other type names
                 let (module_ident, fun_def) = u.target_function;
                 let fun_def_name = fun_def.value();
