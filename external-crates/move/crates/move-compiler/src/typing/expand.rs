@@ -524,7 +524,8 @@ pub fn ide_annotation(context: &mut Context, annotation: &mut IDEAnnotation) {
             }
         }
         IDEAnnotation::ExpandedLambda => (),
-        IDEAnnotation::AutocompleteInfo(_) => (),
+        IDEAnnotation::DotAutocompleteInfo(_) => (),
         IDEAnnotation::MissingMatchArms(_) => (),
+        IDEAnnotation::PathAutocompleteInfo(_) => (),
     }
 }
