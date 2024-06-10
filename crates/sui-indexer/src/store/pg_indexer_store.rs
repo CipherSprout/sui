@@ -33,15 +33,16 @@ use crate::models::epoch::StoredEpochInfo;
 use crate::models::events::StoredEvent;
 use crate::models::objects::{
     StoredDeletedHistoryObject, StoredDeletedObject, StoredHistoryObject, StoredObject,
-    StoredObjectSnapshot,
+    StoredObjectSnapshot, StoredObjectVersion,
 };
 use crate::models::packages::StoredPackage;
 use crate::models::transactions::StoredTransaction;
 use crate::schema::{
-    checkpoints, display, epochs, events, objects, objects_history, objects_snapshot, packages,
-    transactions, tx_calls, tx_changed_objects, tx_digests, tx_input_objects, tx_recipients,
-    tx_senders,
+    checkpoints, display, epochs, events, objects, objects_history, objects_snapshot,
+    objects_version, packages, transactions, tx_calls, tx_changed_objects, tx_digests,
+    tx_input_objects, tx_recipients, tx_senders,
 };
+use crate::types::IndexedObjectVersion;
 use crate::types::{IndexedCheckpoint, IndexedEvent, IndexedPackage, IndexedTransaction, TxIndex};
 use crate::{
     insert_or_ignore_into, on_conflict_do_update, read_only_blocking,
@@ -252,6 +253,7 @@ impl<T: R2D2Connection + 'static> PgIndexerStore<T> {
                     (
                         objects::object_id.eq(excluded(objects::object_id)),
                         objects::object_version.eq(excluded(objects::object_version)),
+                        objects::object_status.eq(excluded(objects::object_status)),
                         objects::object_digest.eq(excluded(objects::object_digest)),
                         objects::checkpoint_sequence_number
                             .eq(excluded(objects::checkpoint_sequence_number)),
@@ -269,6 +271,7 @@ impl<T: R2D2Connection + 'static> PgIndexerStore<T> {
                     |excluded: StoredObject| (
                         objects::object_id.eq(excluded.object_id.clone()),
                         objects::object_version.eq(excluded.object_version),
+                        objects::object_status.eq(excluded(objects::object_status)),
                         objects::object_digest.eq(excluded.object_digest.clone()),
                         objects::checkpoint_sequence_number.eq(excluded.checkpoint_sequence_number),
                         objects::owner_type.eq(excluded.owner_type),
@@ -294,45 +297,6 @@ impl<T: R2D2Connection + 'static> PgIndexerStore<T> {
         })
         .tap_err(|e| {
             tracing::error!("Failed to persist object mutations with error: {}", e);
-        })
-    }
-
-    fn persist_object_deletion_chunk(
-        &self,
-        deleted_objects_chunk: Vec<StoredDeletedObject>,
-    ) -> Result<(), IndexerError> {
-        let guard = self
-            .metrics
-            .checkpoint_db_commit_latency_objects_chunks
-            .start_timer();
-        let len = deleted_objects_chunk.len();
-        transactional_blocking_with_retry!(
-            &self.blocking_cp,
-            |conn| {
-                diesel::delete(
-                    objects::table.filter(
-                        objects::object_id.eq_any(
-                            deleted_objects_chunk
-                                .iter()
-                                .map(|o| o.object_id.clone())
-                                .collect::<Vec<_>>(),
-                        ),
-                    ),
-                )
-                .execute(conn)
-                .map_err(IndexerError::from)
-                .context("Failed to write object deletion to PostgresDB")?;
-
-                Ok::<(), IndexerError>(())
-            },
-            PG_DB_COMMIT_SLEEP_DURATION
-        )
-        .tap_ok(|_| {
-            let elapsed = guard.stop_and_record();
-            info!(elapsed, "Deleted {} chunked objects", len);
-        })
-        .tap_err(|e| {
-            tracing::error!("Failed to persist object deletions with error: {}", e);
         })
     }
 
@@ -482,6 +446,39 @@ impl<T: R2D2Connection + 'static> PgIndexerStore<T> {
         })
         .tap_err(|e| {
             tracing::error!("Failed to persist object history with error: {}", e);
+        })
+    }
+
+    fn persist_objects_version_chunk(
+        &self,
+        object_versions: Vec<StoredObjectVersion>,
+    ) -> Result<(), IndexerError> {
+        let guard = self
+            .metrics
+            .checkpoint_db_commit_latency_objects_version_chunks
+            .start_timer();
+        transactional_blocking_with_retry!(
+            &self.blocking_cp,
+            |conn| {
+                for object_version_chunk in object_versions.chunks(PG_COMMIT_CHUNK_SIZE_INTRA_DB_TX)
+                {
+                    insert_or_ignore_into!(objects_version::table, object_version_chunk, conn);
+                }
+
+                Ok::<(), IndexerError>(())
+            },
+            PG_DB_COMMIT_SLEEP_DURATION
+        )
+        .tap_ok(|_| {
+            let elapsed = guard.stop_and_record();
+            info!(
+                elapsed,
+                "Persisted {} chunked objects version",
+                object_versions.len(),
+            );
+        })
+        .tap_err(|e| {
+            tracing::error!("Failed to persist objects version with error: {}", e);
         })
     }
 
@@ -1095,6 +1092,11 @@ impl<T: R2D2Connection> IndexerStore for PgIndexerStore<T> {
                 }
             }
         }
+        let object_deletions = object_deletions
+            .into_iter()
+            .map(|k| k.into())
+            .collect::<Vec<StoredObject>>();
+
         let mutation_len = object_mutations.len();
         let deletion_len = object_deletions.len();
 
@@ -1111,10 +1113,7 @@ impl<T: R2D2Connection> IndexerStore for PgIndexerStore<T> {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
-                tracing::error!(
-                    "Failed to join persist_object_mutation_chunk futures: {}",
-                    e
-                );
+                tracing::error!("Failed to join object mutation futures: {}", e);
                 IndexerError::from(e)
             })?
             .into_iter()
@@ -1127,17 +1126,14 @@ impl<T: R2D2Connection> IndexerStore for PgIndexerStore<T> {
             })?;
         let deletion_futures = object_deletion_chunks
             .into_iter()
-            .map(|c| self.spawn_blocking_task(move |this| this.persist_object_deletion_chunk(c)))
+            .map(|c| self.spawn_blocking_task(move |this| this.persist_object_mutation_chunk(c)))
             .collect::<Vec<_>>();
         futures::future::join_all(deletion_futures)
             .await
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
-                tracing::error!(
-                    "Failed to join persist_object_deletion_chunk futures: {}",
-                    e
-                );
+                tracing::error!("Failed to join object deletion futures: {}", e);
                 IndexerError::from(e)
             })?
             .into_iter()
@@ -1252,6 +1248,51 @@ impl<T: R2D2Connection> IndexerStore for PgIndexerStore<T> {
             })?;
         let elapsed = guard.stop_and_record();
         info!(elapsed, "Persisted {} objects history", len);
+        Ok(())
+    }
+
+    async fn persist_objects_version(
+        &self,
+        object_versions: Vec<IndexedObjectVersion>,
+    ) -> Result<(), IndexerError> {
+        let guard = self
+            .metrics
+            .checkpoint_db_commit_latency_objects_version
+            .start_timer();
+        let object_versions_to_commit = object_versions
+            .into_iter()
+            .map(|v| v.into())
+            .collect::<Vec<StoredObjectVersion>>();
+        let len = object_versions_to_commit.len();
+        let object_versions_to_commit_chunks =
+            chunk!(object_versions_to_commit, self.config.parallel_chunk_size);
+
+        let futures = object_versions_to_commit_chunks
+            .into_iter()
+            .map(|c| self.spawn_blocking_task(move |this| this.persist_objects_version_chunk(c)))
+            .collect::<Vec<_>>();
+
+        futures::future::join_all(futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to join persist_objects_version_chunk futures: {}",
+                    e
+                );
+                IndexerError::from(e)
+            })?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                IndexerError::PostgresWriteError(format!(
+                    "Failed to persist all objects history chunks: {:?}",
+                    e
+                ))
+            })?;
+        let elapsed = guard.stop_and_record();
+        info!(elapsed, "Persisted {} objects version", len);
         Ok(())
     }
 

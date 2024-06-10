@@ -136,9 +136,11 @@ pub struct IndexerMetrics {
     pub checkpoint_db_commit_latency_objects: Histogram,
     pub checkpoint_db_commit_latency_objects_snapshot: Histogram,
     pub checkpoint_db_commit_latency_objects_history: Histogram,
+    pub checkpoint_db_commit_latency_objects_version: Histogram,
     pub checkpoint_db_commit_latency_objects_chunks: Histogram,
     pub checkpoint_db_commit_latency_objects_snapshot_chunks: Histogram,
     pub checkpoint_db_commit_latency_objects_history_chunks: Histogram,
+    pub checkpoint_db_commit_latency_objects_version_chunks: Histogram,
     pub checkpoint_db_commit_latency_events: Histogram,
     pub checkpoint_db_commit_latency_events_chunks: Histogram,
     pub checkpoint_db_commit_latency_packages: Histogram,
@@ -458,6 +460,12 @@ impl IndexerMetrics {
                 DATA_INGESTION_LATENCY_SEC_BUCKETS.to_vec(),
                 registry,
             ).unwrap(),
+            checkpoint_db_commit_latency_objects_version: register_histogram_with_registry!(
+                "checkpoint_db_commit_latency_objects_version",
+                "Time spent commiting objects version",
+                DATA_INGESTION_LATENCY_SEC_BUCKETS.to_vec(),
+                registry,
+            ).unwrap(),
             checkpoint_db_commit_latency_objects_chunks: register_histogram_with_registry!(
                 "checkpoint_db_commit_latency_objects_chunks",
                 "Time spent commiting objects chunks",
@@ -475,6 +483,12 @@ impl IndexerMetrics {
             checkpoint_db_commit_latency_objects_history_chunks: register_histogram_with_registry!(
                 "checkpoint_db_commit_latency_objects_history_chunks",
                 "Time spent commiting objects history chunks",
+                DATA_INGESTION_LATENCY_SEC_BUCKETS.to_vec(),
+                registry,
+            ).unwrap(),
+            checkpoint_db_commit_latency_objects_version_chunks: register_histogram_with_registry!(
+                "checkpoint_db_commit_latency_objects_version_chunks",
+                "Time spent commiting objects version chunks",
                 DATA_INGESTION_LATENCY_SEC_BUCKETS.to_vec(),
                 registry,
             ).unwrap(),

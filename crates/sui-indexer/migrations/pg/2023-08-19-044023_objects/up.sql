@@ -1,10 +1,11 @@
 CREATE TABLE objects (
     object_id                   bytea         PRIMARY KEY,
     object_version              bigint        NOT NULL,
-    object_digest               bytea         NOT NULL,
+    object_status               smallint      NOT NULL,
+    object_digest               bytea,
     checkpoint_sequence_number  bigint        NOT NULL,
     -- Immutable/Address/Object/Shared, see types.rs
-    owner_type                  smallint      NOT NULL,
+    owner_type                  smallint,
     -- bytes of SuiAddress/ObjectID of the owner ID.
     -- Non-null for objects with an owner: Addresso or Objects
     owner_id                    bytea,
@@ -15,7 +16,7 @@ CREATE TABLE objects (
     object_type_module          text,
     object_type_name            text,
     -- bcs serialized Object
-    serialized_object           bytea         NOT NULL,
+    serialized_object           bytea,
     -- Non-null when the object is a coin.
     -- e.g. `0x2::sui::SUI`
     coin_type                   text,
@@ -104,3 +105,16 @@ CREATE INDEX objects_snapshot_coin_owner ON objects_snapshot (owner_id, coin_typ
 CREATE INDEX objects_snapshot_coin_only ON objects_snapshot (coin_type, object_id) WHERE coin_type IS NOT NULL;
 CREATE INDEX objects_snapshot_package_module_name_full_type ON objects_snapshot (object_type_package, object_type_module, object_type_name, object_type);
 CREATE INDEX objects_snapshot_owner_package_module_name_full_type ON objects_snapshot (owner_id, object_type_package, object_type_module, object_type_name, object_type);
+
+-- versions table to store the version history of objects,
+-- input version can be NULL for created and unwrapped objects,
+-- output version is always NOT NULL. even for deleted and wrapped objects.
+CREATE TABLE objects_version (
+    object_id                   bytea         NOT NULL,
+    input_version               bigint,
+    output_version              bigint        NOT NULL,
+    checkpoint_sequence_number  bigint        NOT NULL,
+    CONSTRAINT objects_version_pk PRIMARY KEY (checkpoint_sequence_number, object_id, output_version)
+);
+-- PG does not allow DESC in the parimary key spec.
+CREATE INDEX idx_objects_version_checkpoint_id_version ON objects_version (checkpoint_sequence_number, object_id, output_version DESC);
