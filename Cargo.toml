@@ -570,6 +570,9 @@ fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "c101a517
 fastcrypto-tbls = { git = "https://github.com/MystenLabs/fastcrypto", rev = "c101a5176799db3eb9c801b844e7add92153d291" }
 fastcrypto-zkp = { git = "https://github.com/MystenLabs/fastcrypto", rev = "c101a5176799db3eb9c801b844e7add92153d291", package = "fastcrypto-zkp" }
 fastcrypto-vdf = { git = "https://github.com/MystenLabs/fastcrypto", rev = "c101a5176799db3eb9c801b844e7add92153d291", features = ["experimental"] }
+passkey = "0.2.0"
+coset = "0.3"
+p256 = { version = "0.13.2", features = ["ecdsa"] }
 
 # anemo dependencies
 anemo = { git = "https://github.com/mystenlabs/anemo.git", rev = "26d415eb9aa6a2417be3c03c57d6e93c30bd1ad7" }
