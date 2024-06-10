@@ -160,8 +160,8 @@ impl BuildConfig {
     pub fn build(self, path: &Path) -> SuiResult<CompiledPackage> {
         let print_diags_to_stderr = self.print_diags_to_stderr;
         let run_bytecode_verifier = self.run_bytecode_verifier;
-        let resolution_graph = self.resolution_graph(path)?;
         let chain_id = self.chain_id.clone();
+        let resolution_graph = self.resolution_graph(path)?;
         build_from_resolution_graph(
             resolution_graph,
             run_bytecode_verifier,
@@ -638,7 +638,8 @@ pub struct PackageDependencies {
     pub unpublished: BTreeSet<Symbol>,
     /// Set of dependencies with invalid `published-at` addresses.
     pub invalid: BTreeMap<Symbol, String>,
-    /// Set of dependencies that have conflicting `published-at` addresses in Move.lock and Move.toml.
+    /// Set of dependencies that have conflicting `published-at` addresses. The key refers to
+    /// the package, and the tuple refers to the address in the (Move.lock, Move.toml) respectively.
     pub conflicting: BTreeMap<Symbol, (String, String)>,
 }
 

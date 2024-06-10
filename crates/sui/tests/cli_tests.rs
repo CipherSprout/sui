@@ -134,6 +134,7 @@ async fn test_addresses_command() -> Result<(), anyhow::Error> {
     let test_cluster = TestClusterBuilder::new().build().await;
     let mut context = test_cluster.wallet;
 
+    // Add 3 accounts
     for _ in 0..3 {
         context
             .config
@@ -1954,7 +1955,6 @@ async fn test_package_management_on_upgrade_command_conflict() -> Result<(), any
         .await?
         .data;
 
-    // Check log output contains all object ids.
     let gas_obj_id = object_refs.first().unwrap().object().unwrap().object_id;
 
     // Provide path to well formed package sources

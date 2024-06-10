@@ -12,7 +12,8 @@ use move_package::{
 };
 use move_symbol_pool::Symbol;
 use sui_json_rpc_types::{get_new_package_obj_from_response, SuiTransactionBlockResponse};
-use sui_sdk::{types::base_types::ObjectID, wallet_context::WalletContext};
+use sui_sdk::wallet_context::WalletContext;
+use sui_types::base_types::ObjectID;
 
 const PUBLISHED_AT_MANIFEST_FIELD: &str = "published-at";
 

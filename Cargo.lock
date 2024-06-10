@@ -13408,6 +13408,7 @@ dependencies = [
  "move-symbol-pool",
  "sui-json-rpc-types",
  "sui-sdk 1.28.0",
+ "sui-types",
  "tracing",
 ]
 

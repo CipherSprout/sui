@@ -157,6 +157,7 @@ fn build_packages_with_move_config(
         config: config.clone(),
         run_bytecode_verifier: true,
         print_diags_to_stderr: false,
+        chain_id: None, // Framework pkg addr is agnostic to chain, resolves from Move.toml
     }
     .build(stdlib_path)
     .unwrap();

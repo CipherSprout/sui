@@ -1568,8 +1568,7 @@ impl SuiClientCommands {
                     ));
                 }
 
-                let build_config =
-                    resolve_lock_file_path(build_config, Some(package_path.clone()))?;
+                let build_config = resolve_lock_file_path(build_config, Some(&package_path))?;
                 let chain_id = context
                     .get_client()
                     .await?
