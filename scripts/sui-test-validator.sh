@@ -5,7 +5,7 @@ This script offers backward compatibiltiy, but ideally, you should migrate to su
 
 To recreate the exact basic functionality of sui-test-validator, you must use the following options:
   * --with-faucet --> to start the faucet server on the default host and port
-  * --dont-persist-state --> to start the local network without persisting the state
+  * --random-genesis --> to start the local network without persisting the state
 
 You can also use the following options to start the local network with more features:
   * --with-indexer --> to start the indexer on the default host and port. Note that this requires a Postgres database to be running
@@ -25,7 +25,7 @@ for arg in "$@"; do
     fi
 done
 
-cmd="sui start --with-faucet --dont-persist-state"
+cmd="sui start --with-faucet --random-genesis"
 
 if  [ "$start_graphql" = true ]; then
     echo "Starting with GraphQL enabled."

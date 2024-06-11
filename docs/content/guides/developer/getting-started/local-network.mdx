@@ -11,15 +11,15 @@ If you haven't already, you need to [install Sui](./sui-install.mdx) on your sys
 To start the local network, run the following command from your `sui` root folder.
 
 ```bash
-RUST_LOG="off,sui_node=info" sui start --with-faucet --dont-persist-state
+RUST_LOG="off,sui_node=info" sui start --with-faucet --random-genesis
 ```
 
 The command
 * starts the Sui CLI binary
-* calls the `sui start` command, passing two flags `--with-faucet` to start a faucet service, and `--dont-persist-state` to generate a new genesis and not persist the local network
+* calls the `sui start` command, passing two flags `--with-faucet` to start a faucet service, and `--random-genesis` to generate a new genesis and not persist the local network
 * instructs Rust to set specific logging through the `RUST_LOG`=`off,sui_node=info` variable, which turns off logging for all components except sui-node. If you want to see more detailed logs, you can remove `RUST_LOG` from the command.
 
-**Important:** Each time you start the network by passing `--dont-persist-state`, the network starts as a new network with no previous data. The local network is not persistent.
+**Important:** Each time you start the network by passing `--random-genesis`, the network starts as a new network with no previous data. The local network is not persistent.
 
 To customize your local Sui network, such as changing the port used, include additional parameters in the `sui start` command:
 
@@ -28,7 +28,7 @@ OPTIONS:
         --epoch-duration-ms <EPOCH_DURATION_MS>
          Set the epoch duration.
 
-         When this value is not set and the `--dont-persist-state` flag is passed, the epoch
+         When this value is not set and the `--random-genesis` flag is passed, the epoch
          duration will be set to 60 seconds.
 
         --faucet-port <FAUCET_PORT>

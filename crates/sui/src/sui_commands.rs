@@ -137,7 +137,7 @@ pub enum SuiCommand {
 
         /// Set the epoch duration.
         ///
-        /// When this value is not set and the `--dont-persist-state` flag is passed, the epoch
+        /// When this value is not set and the `--random-genesis` flag is passed, the epoch
         /// duration will be set to 60 seconds.
         #[clap(long)]
         epoch_duration_ms: Option<u64>,
@@ -539,7 +539,7 @@ async fn start(
 
     if epoch_duration_ms.is_some() && genesis_blob_exists(config.clone()) && !dont_persist_state {
         bail!(
-            "Epoch duration can only be set when passing the `--dont-persist-state` flag, or when \
+            "Epoch duration can only be set when passing the `--random-genesis` flag, or when \
             there is no genesis configuration in the default Sui configuration folder or the given \
             config_dir.",
         );
