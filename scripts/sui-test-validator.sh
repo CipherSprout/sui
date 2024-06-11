@@ -5,7 +5,7 @@ This script offers backward compatibiltiy, but ideally, you should migrate to su
 
 To recreate the exact basic functionality of sui-test-validator, you must use the following options:
   * --with-faucet --> to start the faucet server on the default host and port
-  * --random-genesis --> to start the local network without persisting the state
+  * --random-genesis --> to start the local network without persisting the state and from a random genesis
 
 You can also use the following options to start the local network with more features:
   * --with-indexer --> to start the indexer on the default host and port. Note that this requires a Postgres database to be running

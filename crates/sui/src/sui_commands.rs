@@ -77,20 +77,21 @@ pub enum SuiCommand {
         #[clap(short, long)]
         config_dir: Option<std::path::PathBuf>,
 
-        /// Don't persist state between re-runs. A new genesis is created each time this command is
-        /// run and dont_persist_state flag is set.
+        /// A new genesis is created each time this flag is set, and state is not persisted between
+        /// runs.
         #[clap(long)]
-        dont_persist_state: bool,
+        random_genesis: bool,
 
-        /// Start a GraphQL server with default host and port: 127.0.0.1:8000
+        /// Start a GraphQL server with default host and port: 127.0.0.1:8000. Note that GraphQL
+        /// requires a running indexer.
         #[clap(long)]
         with_graphql: bool,
 
-        /// Start a faucet with default host and port: 127.0.0.1:9123
+        /// Start a faucet with default host and port: 127.0.0.1:9123.
         #[clap(long)]
         with_faucet: bool,
 
-        /// Start an indexer with default host and port: 0.0.0.0:9124
+        /// Start an indexer with default host and port: 0.0.0.0:9124.
         /// The indexer will be started in writer mode and reader mode.
         #[clap(long)]
         with_indexer: bool,
@@ -135,10 +136,9 @@ pub enum SuiCommand {
         #[clap(long, default_value = "postgrespw")]
         pg_password: String,
 
-        /// Set the epoch duration.
-        ///
-        /// When this value is not set and the `--random-genesis` flag is passed, the epoch
-        /// duration will be set to 60 seconds.
+        /// Set the epoch duration. Can only be used when `--random-genesis` flag is passed or if
+        /// there's no genesis config and one will be auto-generated. When this flag is not set but
+        /// `--random-genesis` is set, the epoch duration will be set to 60 seconds.
         #[clap(long)]
         epoch_duration_ms: Option<u64>,
 
@@ -298,7 +298,7 @@ impl SuiCommand {
             }
             SuiCommand::Start {
                 config_dir,
-                dont_persist_state,
+                random_genesis,
                 with_graphql,
                 with_faucet,
                 with_indexer,
@@ -320,7 +320,7 @@ impl SuiCommand {
                     with_faucet,
                     with_graphql,
                     with_indexer,
-                    dont_persist_state,
+                    random_genesis,
                     epoch_duration_ms,
                     indexer_port,
                     fullnode_port,
@@ -514,7 +514,7 @@ async fn start(
     with_faucet: bool,
     with_graphql: bool,
     with_indexer: bool,
-    dont_persist_state: bool,
+    random_genesis: bool,
     epoch_duration_ms: Option<u64>,
     indexer_port: u16,
     fullnode_port: u16,
@@ -528,16 +528,21 @@ async fn start(
     pg_user: String,
     pg_password: String,
 ) -> Result<(), anyhow::Error> {
+    if random_genesis {
+        bail!("Cannot pass `--config-dir` and `--random-genesis` flags at the same time.");
+    }
+
     if with_graphql {
         ensure!(
             with_indexer,
             "GraphQL requires the indexer to be started. Please pass \
-            `--with-indexer` flag and ensure you have a Postgres DB running locally. For more \
-            information, see https://github.com/MystenLabs/sui/tree/main/crates/sui-graphql-rpc"
+            `--with-indexer` flag and ensure you have a Postgres DB running locally or pass in the \
+            required `pg-host` and related `pg-` flags to connect to a remote DB. For more \
+            information, see https://github.com/MystenLabs/sui/tree/main/crates/sui-graphql-rpc."
         );
     }
 
-    if epoch_duration_ms.is_some() && genesis_blob_exists(config.clone()) && !dont_persist_state {
+    if epoch_duration_ms.is_some() && genesis_blob_exists(config.clone()) && !random_genesis {
         bail!(
             "Epoch duration can only be set when passing the `--random-genesis` flag, or when \
             there is no genesis configuration in the default Sui configuration folder or the given \
@@ -560,7 +565,7 @@ async fn start(
 
     // If this is set, then no data will be persisted between runs, and a new genesis will be
     // generated each run.
-    if dont_persist_state {
+    if random_genesis {
         swarm_builder = swarm_builder.committee_size(NonZeroUsize::new(NUM_VALIDATORS).unwrap());
         let genesis_config = GenesisConfig::custom_genesis(1, 100);
         swarm_builder = swarm_builder.with_genesis_config(genesis_config);
