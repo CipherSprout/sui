@@ -548,10 +548,8 @@ impl SuiTransactionBlockKind {
                                 )
                             }
                             EndOfEpochTransactionKind::BridgeCommitteeInit(
-                                chain_id,
                                 bridge_shared_version,
                             ) => SuiEndOfEpochTransactionKind::BridgeCommitteeUpdate(
-                                (*chain_id.as_bytes()).into(),
                                 bridge_shared_version,
                             ),
                         })
@@ -650,11 +648,8 @@ impl SuiTransactionBlockKind {
                                     (*id.as_bytes()).into(),
                                 )
                             }
-                            EndOfEpochTransactionKind::BridgeCommitteeInit(id, seq) => {
-                                SuiEndOfEpochTransactionKind::BridgeCommitteeUpdate(
-                                    (*id.as_bytes()).into(),
-                                    seq,
-                                )
+                            EndOfEpochTransactionKind::BridgeCommitteeInit(seq) => {
+                                SuiEndOfEpochTransactionKind::BridgeCommitteeUpdate(seq)
                             }
                         })
                         .collect(),
@@ -1675,7 +1670,7 @@ pub enum SuiEndOfEpochTransactionKind {
     RandomnessStateCreate,
     CoinDenyListStateCreate,
     BridgeStateCreate(CheckpointDigest),
-    BridgeCommitteeUpdate(CheckpointDigest, SequenceNumber),
+    BridgeCommitteeUpdate(SequenceNumber),
 }
 
 #[serde_as]

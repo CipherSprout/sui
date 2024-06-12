@@ -240,9 +240,7 @@ mod tests {
     use fastcrypto::hash::{HashFunction, Keccak256};
     use fastcrypto::traits::KeyPair;
     use prometheus::Registry;
-    use sui_types::bridge::{
-        BridgeChainId, BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, TOKEN_ID_BTC, TOKEN_ID_USDT,
-    };
+    use sui_types::bridge::{BridgeChainId, TOKEN_ID_BTC, TOKEN_ID_USDT};
     use sui_types::TypeTag;
     use sui_types::{base_types::SuiAddress, crypto::get_key_pair, digests::TransactionDigest};
 
@@ -253,13 +251,7 @@ mod tests {
         let (mut authority, pubkey, _) = get_test_authority_and_key(10000, 12345);
 
         let pubkey_bytes = BridgeAuthorityPublicKeyBytes::from(&pubkey);
-        let committee = Arc::new(
-            BridgeCommittee::new(
-                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-                vec![authority.clone()],
-            )
-            .unwrap(),
-        );
+        let committee = Arc::new(BridgeCommittee::new(vec![authority.clone()]).unwrap());
         let action =
             get_test_sui_to_eth_bridge_action(None, Some(1), Some(1), Some(100), None, None, None);
 
@@ -269,13 +261,7 @@ mod tests {
 
         // Ok
         authority.base_url = "https://foo.suibridge.io".to_string();
-        let committee = Arc::new(
-            BridgeCommittee::new(
-                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-                vec![authority.clone()],
-            )
-            .unwrap(),
-        );
+        let committee = Arc::new(BridgeCommittee::new(vec![authority.clone()]).unwrap());
         let client = BridgeClient::new(pubkey_bytes.clone(), committee.clone()).unwrap();
         assert!(client.base_url.is_some());
 
@@ -287,13 +273,7 @@ mod tests {
 
         // invalid base url
         authority.base_url = "127.0.0.1:12345".to_string(); // <-- bad, missing http://
-        let committee = Arc::new(
-            BridgeCommittee::new(
-                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-                vec![authority.clone()],
-            )
-            .unwrap(),
-        );
+        let committee = Arc::new(BridgeCommittee::new(vec![authority.clone()]).unwrap());
         let client = BridgeClient::new(pubkey_bytes.clone(), committee.clone()).unwrap();
         assert!(client.base_url.is_none());
         assert!(matches!(
@@ -310,13 +290,7 @@ mod tests {
 
         // invalid base url
         authority.base_url = "http://127.256.0.1:12345".to_string(); // <-- bad, invalid ipv4 address
-        let committee = Arc::new(
-            BridgeCommittee::new(
-                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-                vec![authority.clone()],
-            )
-            .unwrap(),
-        );
+        let committee = Arc::new(BridgeCommittee::new(vec![authority.clone()]).unwrap());
         let client = BridgeClient::new(pubkey_bytes, committee.clone()).unwrap();
         assert!(client.base_url.is_none());
         assert!(matches!(
@@ -348,11 +322,7 @@ mod tests {
         let (authority, _pubkey, secret) = get_test_authority_and_key(5000, port);
         let (authority2, _pubkey2, secret2) = get_test_authority_and_key(5000, port - 1);
 
-        let committee = BridgeCommittee::new(
-            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-            vec![authority.clone(), authority2.clone()],
-        )
-        .unwrap();
+        let committee = BridgeCommittee::new(vec![authority.clone(), authority2.clone()]).unwrap();
 
         let mut client =
             BridgeClient::new(authority.pubkey_bytes(), Arc::new(committee.clone())).unwrap();
@@ -416,11 +386,7 @@ mod tests {
         let mut authority_blocklisted = authority.clone();
         authority_blocklisted.is_blocklisted = true;
         let committee2 = Arc::new(
-            BridgeCommittee::new(
-                BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-                vec![authority_blocklisted.clone(), authority2.clone()],
-            )
-            .unwrap(),
+            BridgeCommittee::new(vec![authority_blocklisted.clone(), authority2.clone()]).unwrap(),
         );
         client.update_committee(committee2);
         mock_handler.add_sui_event_response(tx_digest, event_idx, Ok(signed_event));

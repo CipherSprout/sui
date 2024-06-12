@@ -47,8 +47,8 @@ pub const BRIDGE_EXECUTE_SYSTEM_MESSAGE_FUNCTION_NAME: &IdentStr =
 
 pub const BRIDGE_SUPPORTED_ASSET: &[&str] = &["btc", "eth", "usdc", "usdt"];
 
-pub const BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER: u64 = 9000; // out of 10000 (90%)
-pub const BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER_TESTNET: u64 = 7500; // out of 10000 (75%)
+// This is the old value. The latest valeu is controlled by ProtocolConfig
+pub const DEFAULT_BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER: u64 = 7500; // out of 10000 (75%)
 pub const BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER: u64 = 10000; // (100%)
 
 // Threshold for action to be approved by the committee (our of 10000)
@@ -68,6 +68,10 @@ pub const TOKEN_ID_BTC: u8 = 1;
 pub const TOKEN_ID_ETH: u8 = 2;
 pub const TOKEN_ID_USDC: u8 = 3;
 pub const TOKEN_ID_USDT: u8 = 4;
+
+pub fn get_minimal_threshold_for_bridge_committee(value_from_protocol_config: Option<u64>) -> u64 {
+    value_from_protocol_config.unwrap_or(DEFAULT_BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER)
+}
 
 #[derive(
     Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, TryFromPrimitive, JsonSchema, Hash,

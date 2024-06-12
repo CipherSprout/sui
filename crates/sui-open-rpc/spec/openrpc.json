@@ -1865,6 +1865,7 @@
                 },
                 "min_checkpoint_interval_ms": null,
                 "min_move_binary_format_version": null,
+                "minimal_threshold_for_bridge_committee": null,
                 "move_binary_format_version": {
                   "u32": "6"
                 },

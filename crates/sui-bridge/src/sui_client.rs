@@ -19,14 +19,10 @@ use sui_json_rpc_types::{
 use sui_sdk::{SuiClient as SuiSdkClient, SuiClientBuilder};
 use sui_types::base_types::ObjectRef;
 use sui_types::base_types::SequenceNumber;
+use sui_types::bridge::BridgeSummary;
 use sui_types::bridge::BridgeTreasurySummary;
 use sui_types::bridge::MoveTypeCommitteeMember;
 use sui_types::bridge::MoveTypeParsedTokenTransferMessage;
-use sui_types::bridge::{
-    BridgeSummary, BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-    BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER_TESTNET,
-};
-use sui_types::digests::get_testnet_chain_identifier;
 use sui_types::gas_coin::GasCoin;
 use sui_types::object::Owner;
 use sui_types::parse_sui_type_tag;
@@ -250,37 +246,11 @@ where
                 is_blocklisted: blocklisted,
             });
         }
-        let minimal_committee_voting_power = if self.get_chain_identifier_must_succeed().await
-            == &get_testnet_chain_identifier().to_string()
-        {
-            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER_TESTNET
-        } else {
-            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER
-        };
-        BridgeCommittee::new(minimal_committee_voting_power, authorities)
+        BridgeCommittee::new(authorities)
     }
 
     pub async fn get_chain_identifier(&self) -> BridgeResult<String> {
         Ok(self.inner.get_chain_identifier().await?)
-    }
-
-    /// Get Sui Network Chain Identifier.
-    // We retry a few times in case of errors. If it fails eventually, we panic.
-    // In general it's safe to call in the beginning of the program.
-    // After the first call, the result is cached since the value should never change.
-    pub async fn get_chain_identifier_must_succeed(&self) -> &String {
-        static CHAIN_ID: OnceCell<String> = OnceCell::const_new();
-        CHAIN_ID
-            .get_or_init(|| async move {
-                let Ok(Ok(id)) = retry_with_max_elapsed_time!(
-                    self.get_chain_identifier(),
-                    Duration::from_secs(30)
-                ) else {
-                    panic!("Failed to get chain identifier after retries");
-                };
-                id
-            })
-            .await
     }
 
     pub async fn get_reference_gas_price_until_success(&self) -> u64 {

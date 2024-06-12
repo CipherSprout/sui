@@ -612,7 +612,6 @@ mod tests {
     use crate::server::mock_handler::BridgeRequestMockHandler;
     use crate::test_utils::get_test_authorities_and_run_mock_bridge_server;
     use crate::types::BridgeCommittee;
-    use sui_types::bridge::BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
 
     #[tokio::test]
     async fn test_bridge_server_handle_blocklist_update_action_path() {
@@ -737,8 +736,7 @@ mod tests {
         let (_handles, authorities, mut secrets) =
             get_test_authorities_and_run_mock_bridge_server(vec![10000], vec![mock.clone()]);
         mock.set_signer(secrets.swap_remove(0));
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities).unwrap();
+        let committee = BridgeCommittee::new(authorities).unwrap();
         let pub_key = committee.members().keys().next().unwrap();
         BridgeClient::new(pub_key.clone(), Arc::new(committee)).unwrap()
     }

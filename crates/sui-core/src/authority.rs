@@ -4442,10 +4442,7 @@ impl AuthorityState {
             .epoch_start_config()
             .bridge_obj_initial_shared_version()
             .expect("initial version must exist");
-        let tx = EndOfEpochTransactionKind::init_bridge_committee(
-            epoch_store.get_chain_identifier(),
-            bridge_initial_shared_version,
-        );
+        let tx = EndOfEpochTransactionKind::init_bridge_committee(bridge_initial_shared_version);
         info!("Init Bridge committee tx");
         Some(tx)
     }

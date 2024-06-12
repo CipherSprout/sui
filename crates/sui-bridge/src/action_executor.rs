@@ -580,10 +580,7 @@ mod tests {
     use sui_json_rpc_types::SuiTransactionBlockEffects;
     use sui_json_rpc_types::SuiTransactionBlockEvents;
     use sui_json_rpc_types::{SuiEvent, SuiTransactionBlockResponse};
-    use sui_types::bridge::{
-        BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, TOKEN_ID_BTC, TOKEN_ID_ETH, TOKEN_ID_USDC,
-        TOKEN_ID_USDT,
-    };
+    use sui_types::bridge::{TOKEN_ID_BTC, TOKEN_ID_ETH, TOKEN_ID_USDC, TOKEN_ID_USDT};
     use sui_types::crypto::get_key_pair;
     use sui_types::gas_coin::GasCoin;
     use sui_types::TypeTag;
@@ -1224,8 +1221,7 @@ mod tests {
             vec![mock0.clone(), mock1.clone(), mock2.clone(), mock3.clone()],
         );
 
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities).unwrap();
+        let committee = BridgeCommittee::new(authorities).unwrap();
 
         let agg = Arc::new(BridgeAuthorityAggregator::new(Arc::new(committee)));
         let metrics = Arc::new(BridgeMetrics::new(&registry));

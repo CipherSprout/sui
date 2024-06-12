@@ -189,7 +189,6 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use sui_types::base_types::SuiAddress;
-    use sui_types::bridge::BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
     use sui_types::bridge::{BridgeChainId, TOKEN_ID_ETH};
     use sui_types::crypto::get_key_pair;
     use sui_types::digests::TransactionDigest;
@@ -208,11 +207,7 @@ mod tests {
         let (authority2, pubkey2, _secret) = get_test_authority_and_key(5000, 9999);
         let pubkey_bytes2 = BridgeAuthorityPublicKeyBytes::from(&pubkey2);
 
-        let committee = BridgeCommittee::new(
-            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-            vec![authority1.clone(), authority2.clone()],
-        )
-        .unwrap();
+        let committee = BridgeCommittee::new(vec![authority1.clone(), authority2.clone()]).unwrap();
 
         let action: BridgeAction =
             get_test_sui_to_eth_bridge_action(None, Some(1), Some(1), Some(100), None, None, None);
@@ -267,11 +262,7 @@ mod tests {
 
         // Authority is blocklisted, verification should fail
         authority1.is_blocklisted = true;
-        let committee = BridgeCommittee::new(
-            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-            vec![authority1, authority2],
-        )
-        .unwrap();
+        let committee = BridgeCommittee::new(vec![authority1, authority2]).unwrap();
         let signed_action = SignedBridgeAction::new_from_data_and_sig(action.clone(), sig);
         let _ = verify_signed_bridge_action(&action, signed_action, &pubkey_bytes, &committee)
             .unwrap_err();
@@ -329,15 +320,12 @@ mod tests {
             base_url: "".into(),
         };
 
-        let committee = BridgeCommittee::new(
-            BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
-            vec![
-                authority1.clone(),
-                authority2.clone(),
-                authority3.clone(),
-                authority4.clone(),
-            ],
-        )
+        let committee = BridgeCommittee::new(vec![
+            authority1.clone(),
+            authority2.clone(),
+            authority3.clone(),
+            authority4.clone(),
+        ])
         .unwrap();
 
         let action = BridgeAction::SuiToEthBridgeAction(SuiToEthBridgeAction {

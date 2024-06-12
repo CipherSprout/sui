@@ -287,3 +287,4 @@ consensus_max_transaction_size_bytes: 262144
 consensus_max_transactions_in_block_bytes: 6291456
 min_checkpoint_interval_ms: 200
 checkpoint_summary_version_specific_data: 1
+minimal_threshold_for_bridge_committee: 9000

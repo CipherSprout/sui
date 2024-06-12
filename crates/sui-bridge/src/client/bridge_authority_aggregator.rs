@@ -239,7 +239,6 @@ mod tests {
     use std::collections::BTreeSet;
 
     use fastcrypto::traits::ToFromBytes;
-    use sui_types::bridge::BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
     use sui_types::committee::VALIDITY_THRESHOLD;
     use sui_types::digests::TransactionDigest;
 
@@ -262,9 +261,7 @@ mod tests {
             let (authority, _, _) = get_test_authority_and_key(2500, 12345);
             authorities.push(authority);
         }
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities.clone())
-                .unwrap();
+        let committee = BridgeCommittee::new(authorities.clone()).unwrap();
 
         let agg = BridgeAuthorityAggregator::new(Arc::new(committee));
         assert_eq!(
@@ -279,9 +276,7 @@ mod tests {
 
         // authority 2 is blocklisted
         authorities[2].is_blocklisted = true;
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities.clone())
-                .unwrap();
+        let committee = BridgeCommittee::new(authorities.clone()).unwrap();
         let agg = BridgeAuthorityAggregator::new(Arc::new(committee));
         assert_eq!(
             agg.clients.keys().cloned().collect::<BTreeSet<_>>(),
@@ -294,9 +289,7 @@ mod tests {
 
         // authority 3 has bad url
         authorities[3].base_url = "".into();
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities.clone())
-                .unwrap();
+        let committee = BridgeCommittee::new(authorities.clone()).unwrap();
         let agg = BridgeAuthorityAggregator::new(Arc::new(committee));
         assert_eq!(
             agg.clients.keys().cloned().collect::<BTreeSet<_>>(),
@@ -323,8 +316,7 @@ mod tests {
             vec![mock0.clone(), mock1.clone(), mock2.clone(), mock3.clone()],
         );
 
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities).unwrap();
+        let committee = BridgeCommittee::new(authorities).unwrap();
 
         let agg = BridgeAuthorityAggregator::new(Arc::new(committee));
 
@@ -421,9 +413,7 @@ mod tests {
         authorities[0].is_blocklisted = true;
         authorities[1].is_blocklisted = true;
 
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities.clone())
-                .unwrap();
+        let committee = BridgeCommittee::new(authorities.clone()).unwrap();
 
         let agg = BridgeAuthorityAggregator::new(Arc::new(committee));
 
@@ -514,9 +504,7 @@ mod tests {
             secrets.push(secret);
         }
 
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities.clone())
-                .unwrap();
+        let committee = BridgeCommittee::new(authorities.clone()).unwrap();
 
         let threshold = VALIDITY_THRESHOLD;
         let mut state = GetSigsState::new(threshold, Arc::new(committee));
@@ -541,9 +529,7 @@ mod tests {
 
         // Authority 0 is blocklisted, we lose 2500 stake
         authorities[0].is_blocklisted = true;
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities.clone())
-                .unwrap();
+        let committee = BridgeCommittee::new(authorities.clone()).unwrap();
         let threshold = VALIDITY_THRESHOLD;
         let mut state = GetSigsState::new(threshold, Arc::new(committee));
 
@@ -562,9 +548,7 @@ mod tests {
         authorities[1].voting_power = 1; // set authority's voting power to minimal
         authorities[2].voting_power = 4999;
         authorities[3].is_blocklisted = true; // blocklist authority 3
-        let committee =
-            BridgeCommittee::new(BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER, authorities.clone())
-                .unwrap();
+        let committee = BridgeCommittee::new(authorities.clone()).unwrap();
         let threshold = VALIDITY_THRESHOLD;
         let mut state = GetSigsState::new(threshold, Arc::new(committee.clone()));
 

@@ -636,7 +636,7 @@ mod checked {
                                 "EndOfEpochTransactionKind::BridgeStateCreate should not exist in v1"
                             );
                         }
-                        EndOfEpochTransactionKind::BridgeCommitteeInit(_, _) => {
+                        EndOfEpochTransactionKind::BridgeCommitteeInit(_) => {
                             panic!("EndOfEpochTransactionKind::BridgeCommitteeInit should not exist in v1");
                         }
                     }
