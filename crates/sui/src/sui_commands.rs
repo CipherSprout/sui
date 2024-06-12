@@ -572,8 +572,13 @@ async fn start(
         if let Some(config) = config.clone() {
             swarm_builder = swarm_builder.dir(config);
         }
-        swarm_builder =
-            swarm_builder.with_epoch_duration_ms(epoch_duration_ms.unwrap_or_else(|| 60000));
+
+        let epoch_duration_ms = if let Some(epoch_ms) = epoch_duration_ms {
+            epoch_ms
+        } else {
+            60000
+        };
+        swarm_builder = swarm_builder.with_epoch_duration_ms(epoch_duration_ms);
     } else {
         // load from config dir that was passed, or generate a new genesis if there is no config
         // dir passed and there is no config_dir in the default location
@@ -626,7 +631,7 @@ async fn start(
     info!("Cluster started");
 
     // the indexer requires a full url
-    let fullnode_url = format!("http://{}", fullnode_url.to_string());
+    let fullnode_url = format!("http://{}", fullnode_url);
     info!("Fullnode URL: {}", fullnode_url);
     let pg_address = format!("postgres://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_db_name}");
 
@@ -682,7 +687,7 @@ async fn start(
         let simple_faucet = SimpleFaucet::new(
             new_wallet_context_for_faucet(faucet_key, config_dir.clone(), fullnode_url.clone())?,
             &prom_registry,
-            &config_dir.join("faucet.wal").as_path(),
+            config_dir.join("faucet.wal").as_path(),
             config,
         )
         .await

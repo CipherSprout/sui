@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) Mysten Labs, Inc.
+# SPDX-License-Identifier: Apache-2.0
 
 echo "sui-test-validator binary has been deprecated in favor of sui start, which is a more powerful command that allows you to start the local network with more options.
 This script offers backward compatibiltiy, but ideally, you should migrate to sui start instead. Use sui start --help to see all the flags and options. 

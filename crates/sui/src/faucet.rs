@@ -172,7 +172,7 @@ pub fn new_wallet_context_for_faucet(
         keystore,
         envs: vec![SuiEnv {
             alias: "localnet".to_string(),
-            rpc: fullnode_url.into(),
+            rpc: fullnode_url,
             ws: None,
             basic_auth: None,
         }],

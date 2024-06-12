@@ -17,7 +17,7 @@ Run the following command to see available commands:
 cargo run --bin sui-rpc-loadgen -- -h
 ```
 
-To try this locally, use `RUST_LOG=consensus=off cargo run --bin sui -- start --with-faucet --with-indexer`. Recommend setting `database-url` to an env variable. 
+To try this locally, use `RUST_LOG=consensus=off cargo run --bin sui -- start --with-faucet --with-indexer --random-genesis`. Recommend setting `database-url` to an env variable. 
 
 ### Example 1: Get All Checkpoints
 

@@ -66,7 +66,22 @@ async fn test_genesis() -> Result<(), anyhow::Error> {
 
     // Start network without authorities
     let start = SuiCommand::Start {
-        config: Some(config),
+        config_dir: Some(config),
+        random_genesis: false,
+        with_graphql: false,
+        with_faucet: false,
+        with_indexer: false,
+        fullnode_rpc_port: 9000,
+        faucet_port: 9123,
+        graphql_host: "127.0.0.1".to_string(),
+        graphql_port: 8000,
+        indexer_rpc_port: 9124,
+        pg_port: 5432,
+        pg_host: "localhost".to_string(),
+        pg_db_name: "sui_indexer".to_string(),
+        pg_user: "postgres".to_string(),
+        pg_password: "postgrespw".to_string(),
+        epoch_duration_ms: None,
         no_full_node: false,
     }
     .execute()

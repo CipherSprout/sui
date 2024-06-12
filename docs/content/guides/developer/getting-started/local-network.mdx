@@ -14,11 +14,11 @@ To start the local network, run the following command after you installed Sui CL
 RUST_LOG="off,sui_node=info" sui start --with-faucet --random-genesis
 ```
 
-This will:
-* call the Sui CLI binary with two flags:
+This command:
+* calls the Sui CLI binary with two flags:
  * `--with-faucet` to start a faucet service
  * `--random-genesis` to generate a new genesis and not persist the local network state
-* instruct Rust to set specific logging through the `RUST_LOG`=`off,sui_node=info` flags, which turns off logging for all components except `sui-node`. If you want to see more detailed logs, you can remove `RUST_LOG` from the command.
+* instructs Rust to set specific logging through the `RUST_LOG`=`off,sui_node=info` flags, which turns off logging for all components except `sui-node`. If you want to see more detailed logs, you can remove `RUST_LOG` from the command.
 
 :::info
 Each time you start the network by passing `--random-genesis`, the local network starts from a random genesis with no previous data, and the local network is not persisted. If you'd like to persist data, skip passing the `--random-genesis` flag. For more details, see the [Persist local network state](#persist-local-network) section.
@@ -50,9 +50,9 @@ Use `sui start --help` to see these options in your console.
 
 ### Persist local network state
 
-By default, when using `sui start` the command will use an existing Genesis and network configuration if the `~/.sui/sui_config` folder exists and if it has a `genesis.blob` file, or generate a new Genesis configuration if the folder does not exist. If the `--config-dir` is passed, it will check for the `genesis.blob` file and generate one if it does not exist.
+By default, when using `sui start` the command uses an existing genesis and network configuration if the `~/.sui/sui_config` folder exists and includes a `genesis.blob` file. If the folder doesn't exist, it creates the folder and generates a new genesis configuration. If you pass `--config-dir`, the command checks for the `genesis.blob` file and network config file.
 
-Whenever you stop and start again the network without passing `--random-genesis` flag, all history will be preserved and will be accessible.
+Whenever you stop and start the network without passing the `--random-genesis` flag, all history is preserved and accessible.
 
 :::info
 To generate a custom genesis, use the `sui genesis` command and pass the desired custom values. For more information about possible flags and options, run `sui genesis --help`.
