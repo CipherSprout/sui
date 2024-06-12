@@ -2352,6 +2352,9 @@ impl ProtocolConfig {
                         cfg.checkpoint_summary_version_specific_data = Some(1);
                         cfg.min_checkpoint_interval_ms = Some(200);
                     }
+
+                    // Set max transaction deferral to 10 consensus rounds.
+                    cfg.max_deferral_rounds_for_congestion_control = Some(10);
                 }
                 // Use this template when making changes:
                 //
