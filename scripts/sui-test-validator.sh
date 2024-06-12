@@ -8,7 +8,7 @@ To recreate the exact basic functionality of sui-test-validator, you must use th
   * --random-genesis --> to start the local network without persisting the state and from a random genesis
 
 You can also use the following options to start the local network with more features:
-  * --with-indexer --> to start the indexer on the default host and port. Note that this requires a Postgres database to be running
+  * --with-indexer --> to start the indexer on the default host and port. Note that this requires a Postgres database to be running locally, or you need to set the different options to connect to a remote indexer database.
   * --with-graphql --> to start the GraphQL server on the default host and port"
 
 # In sui-test-validator the graphql is started by passing the graphql-port argument

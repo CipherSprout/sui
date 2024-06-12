@@ -98,7 +98,7 @@ pub enum SuiCommand {
 
         /// Port to start the Fullnode RPC server on. Default port is 9000.
         #[clap(long, default_value = "9000")]
-        fullnode_port: u16,
+        fullnode_rpc_port: u16,
 
         /// Port to start the faucet on. Default port is 9123.
         #[clap(long, default_value = "9123")]
@@ -114,7 +114,7 @@ pub enum SuiCommand {
 
         /// Port to start the Indexer RPC server on. Default port is 9124.
         #[clap(long, default_value = "9124")]
-        indexer_port: u16,
+        indexer_rpc_port: u16,
 
         /// Port for the Indexer Postgres DB. Default port is 5432.
         #[clap(long, default_value = "5432")]
@@ -302,11 +302,11 @@ impl SuiCommand {
                 with_graphql,
                 with_faucet,
                 with_indexer,
-                fullnode_port,
+                fullnode_rpc_port,
                 faucet_port,
                 graphql_host,
                 graphql_port,
-                indexer_port,
+                indexer_rpc_port,
                 pg_port,
                 pg_host,
                 pg_db_name,
@@ -322,8 +322,8 @@ impl SuiCommand {
                     with_indexer,
                     random_genesis,
                     epoch_duration_ms,
-                    indexer_port,
-                    fullnode_port,
+                    indexer_rpc_port,
+                    fullnode_rpc_port,
                     no_full_node,
                     graphql_host.clone(),
                     graphql_port,
@@ -516,8 +516,8 @@ async fn start(
     with_indexer: bool,
     random_genesis: bool,
     epoch_duration_ms: Option<u64>,
-    indexer_port: u16,
-    fullnode_port: u16,
+    indexer_rpc_port: u16,
+    fullnode_rpc_port: u16,
     no_full_node: bool,
     graphql_host: String,
     graphql_port: u16,
@@ -551,7 +551,7 @@ async fn start(
     }
 
     if with_indexer {
-        tracing::info!("Starting the indexer service at 0.0.0.0:{indexer_port}");
+        tracing::info!("Starting the indexer service at 0.0.0.0:{indexer_rpc_port}");
     }
     if with_graphql {
         tracing::info!("Starting the GraphQL service at {graphql_host}:{graphql_port}");
@@ -609,7 +609,7 @@ async fn start(
     }
 
     let mut fullnode_url = sui_config::node::default_json_rpc_address();
-    fullnode_url.set_port(fullnode_port);
+    fullnode_url.set_port(fullnode_rpc_port);
 
     if no_full_node {
         swarm_builder = swarm_builder.with_fullnode_count(0);
@@ -634,7 +634,7 @@ async fn start(
         tracing::warn!("Cannot start the indexer without a fullnode, so will skip the indexer and graphql if requested");
     } else {
         if with_indexer {
-            let indexer_address = format!("0.0.0.0:{}", indexer_port);
+            let indexer_address = format!("0.0.0.0:{}", indexer_rpc_port);
             // Start in writer mode
             start_test_indexer::<diesel::PgConnection>(
                 Some(pg_address.clone()),
