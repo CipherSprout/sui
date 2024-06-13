@@ -26,8 +26,7 @@ use sui_data_ingestion_core::{
 use tokio::sync::oneshot;
 use tracing::info;
 
-use sui_bridge_indexer::eth_worker::process_finalized_eth_events;
-use sui_bridge_indexer::eth_worker::process_unfinalized_eth_events;
+use sui_bridge_indexer::eth_worker::process_eth_events;
 
 #[derive(Parser, Clone, Debug)]
 struct Args {
@@ -99,7 +98,7 @@ async fn main() -> Result<()> {
         None => config.start_block,
     };
 
-    println!("Starting from finalized block: {}", newest_finalized_block);
+    info!("Starting from finalized block: {}", newest_finalized_block);
 
     let contract_addresses = HashMap::from_iter(vec![(bridge_address, newest_finalized_block)]);
 
@@ -111,8 +110,8 @@ async fn main() -> Result<()> {
     let pool_clone = pg_pool.clone();
     let provider_clone = provider.clone();
 
-    let _task_handle = spawn_logged_monitored_task!(
-        process_finalized_eth_events(eth_events_rx, provider_clone, &pool_clone),
+    let _finalized_task_handle = spawn_logged_monitored_task!(
+        process_eth_events(eth_events_rx, provider_clone, &pool_clone, true),
         "finalized indexer handler"
     );
 
@@ -123,7 +122,7 @@ async fn main() -> Result<()> {
         None => config.start_block,
     };
 
-    println!(
+    info!(
         "Starting from unfinalized block: {}",
         newest_unfinalized_block_recorded
     );
@@ -136,7 +135,7 @@ async fn main() -> Result<()> {
         .await?,
     );
 
-    println!(
+    info!(
         "Starting from latest block: {}",
         newest_unfinalized_block_recorded
     );
@@ -150,8 +149,8 @@ async fn main() -> Result<()> {
             .await
             .expect("Failed to start eth syncer");
 
-    let _task_handle = spawn_logged_monitored_task!(
-        process_unfinalized_eth_events(eth_events_rx, provider.clone(), &pg_pool),
+    let _unfinalized_task_handle = spawn_logged_monitored_task!(
+        process_eth_events(eth_events_rx, provider.clone(), &pg_pool, false),
         "unfinalized indexer handler"
     );
 
