@@ -15,24 +15,41 @@ You can also use the following options to start the local network with more feat
 
 # In sui-test-validator the graphql is started by passing the graphql-port argument
 graphql_port="--graphql-port"
+config_dir=false
 start_graphql=false
+
+# holds the args names
+named_args=()
+
+
 
 export RUST_LOG=info
 
 # Loop through all arguments
 for arg in "$@"; do
+    if [ "$arg" == "--config-dir" ]; then
+        config_dir=true
+        named_args+=("--network.config")
+        continue
+    fi
     if [ "$arg" == "$graphql_port" ]; then
         start_graphql=true
-        break
     fi
+    named_args+=("$arg")
+
 done
 
 cmd="sui start --with-faucet --random-genesis"
+# To maintain compatibility, when passing a network configuration in a directory, --random-genesis cannot be passed.
+if [ "$config_dir" = true ]; then
+    echo "Starting with the provided network configuration."
+    cmd="sui start --with-faucet"
+fi
 
 if  [ "$start_graphql" = true ]; then
     echo "Starting with GraphQL enabled."
     cmd+=" --with-graphql"
 fi
-
-$cmd "$@"
+echo "Running command: $cmd ${named_args[@]}"
+$cmd "${named_args[@]}"
 

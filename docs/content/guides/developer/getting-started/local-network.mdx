@@ -50,7 +50,7 @@ Use `sui start --help` to see these options in your console.
 
 ### Persist local network state
 
-By default, when using `sui start` the command uses an existing genesis and network configuration if the `~/.sui/sui_config` folder exists and includes a `genesis.blob` file. If the folder doesn't exist, it creates the folder and generates a new genesis configuration. If you pass `--config-dir`, the command checks for the `genesis.blob` file and network config file.
+By default, when using `sui start` the command uses an existing genesis and network configuration if the `~/.sui/sui_config` folder exists and includes a `genesis.blob` file. If the folder doesn't exist, it creates the folder and generates a new genesis configuration. If you pass `--network.config`, the command checks for the `genesis.blob` file and network config file.
 
 Whenever you stop and start the network without passing the `--random-genesis` flag, all history is preserved and accessible.
 
