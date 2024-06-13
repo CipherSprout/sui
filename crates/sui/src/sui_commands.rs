@@ -528,10 +528,6 @@ async fn start(
     pg_user: String,
     pg_password: String,
 ) -> Result<(), anyhow::Error> {
-    if random_genesis {
-        bail!("Cannot pass `--config-dir` and `--random-genesis` flags at the same time.");
-    }
-
     if with_graphql {
         ensure!(
             with_indexer,
