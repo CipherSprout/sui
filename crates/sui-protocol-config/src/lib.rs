@@ -142,6 +142,7 @@ const MAX_PROTOCOL_VERSION: u64 = 50;
 //             New Move stdlib integer modules
 //             Enable checkpoint batching in testnet.
 //             Prepose consensus commit prologue in checkpoints.
+//             Add bridge committee minimal stake power to the protocol config.
 
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
@@ -1141,6 +1142,9 @@ pub struct ProtocolConfig {
 
     /// Version number to use for version_specific_data in `CheckpointSummary`.
     checkpoint_summary_version_specific_data: Option<u64>,
+
+    /// The minimal voting power threshold to form the bridge committee
+    minimal_threshold_for_bridge_committee: Option<u64>,
 }
 
 // feature flags
@@ -1877,6 +1881,8 @@ impl ProtocolConfig {
             min_checkpoint_interval_ms: None,
 
             checkpoint_summary_version_specific_data: None,
+
+            minimal_threshold_for_bridge_committee: None,
             // When adding a new constant, set it to None in the earliest version, like this:
             // new_constant: None,
         };
@@ -2374,6 +2380,11 @@ impl ProtocolConfig {
                         cfg.feature_flags
                             .prepend_prologue_tx_in_consensus_commit_in_checkpoints = true;
                     }
+
+                    // Prior to this, bridge committee on testnet was initialized formed
+                    // with 7500 voting power. Since this value is only used when
+                    // creating the committee, it's ok to not distinguish chains.
+                    cfg.minimal_threshold_for_bridge_committee = Some(9000);
                 }
                 // Use this template when making changes:
                 //

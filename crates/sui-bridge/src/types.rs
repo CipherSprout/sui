@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 use shared_crypto::intent::IntentScope;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use sui_types::bridge::DEFAULT_BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
 use sui_types::bridge::{
     BridgeChainId, MoveTypeTokenTransferPayload, APPROVAL_THRESHOLD_ADD_TOKENS_ON_EVM,
     APPROVAL_THRESHOLD_ADD_TOKENS_ON_SUI, BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER,
-    BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER,
 };
 use sui_types::bridge::{
     MoveTypeParsedTokenTransferMessage, APPROVAL_THRESHOLD_ASSET_PRICE_UPDATE,
@@ -82,9 +82,14 @@ impl BridgeCommittee {
             total_stake += member.voting_power;
             members_map.insert(public_key, member);
         }
-        if total_stake < BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER {
+
+        // Post protocol config 51, the actual minimal threshold to form a committee becomes
+        // configurable. However, here in client side validation, it's ok to use old default value
+        // since it's larger than 51%.
+        let minimal_committee_voting_power = DEFAULT_BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
+        if total_stake < minimal_committee_voting_power {
             return Err(BridgeError::InvalidBridgeCommittee(format!(
-                "Total voting power is below minimal {BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER}"
+                "Total voting power is below minimal {minimal_committee_voting_power}"
             )));
         }
         if total_stake > BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER {
@@ -545,6 +550,7 @@ mod tests {
     use ethers::types::Address as EthAddress;
     use fastcrypto::traits::KeyPair;
     use std::collections::HashSet;
+    use sui_types::bridge::DEFAULT_BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
     use sui_types::bridge::TOKEN_ID_BTC;
     use sui_types::crypto::get_key_pair;
 
@@ -556,8 +562,8 @@ mod tests {
         // This is ok
         let _ = BridgeCommittee::new(vec![authority.clone()]).unwrap();
 
-        // This is not ok - total voting power < BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER
-        authority.voting_power = BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER - 1;
+        // This is not ok - total voting power < DEFAULT_BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER
+        authority.voting_power = DEFAULT_BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER - 1;
         let _ = BridgeCommittee::new(vec![authority.clone()]).unwrap_err();
 
         // This is not ok - total voting power > BRIDGE_COMMITTEE_MAXIMAL_VOTING_POWER

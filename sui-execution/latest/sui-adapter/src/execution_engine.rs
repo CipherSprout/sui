@@ -13,6 +13,7 @@ mod checked {
         BALANCE_CREATE_REWARDS_FUNCTION_NAME, BALANCE_DESTROY_REBATES_FUNCTION_NAME,
         BALANCE_MODULE_NAME,
     };
+    use sui_types::bridge::get_minimal_threshold_for_bridge_committee;
     use sui_types::execution_mode::{self, ExecutionMode};
     use sui_types::gas_coin::GAS;
     use sui_types::messages_checkpoint::CheckpointTimestamp;
@@ -38,7 +39,6 @@ mod checked {
         AUTHENTICATOR_STATE_MODULE_NAME, AUTHENTICATOR_STATE_UPDATE_FUNCTION_NAME,
     };
     use sui_types::base_types::SequenceNumber;
-    use sui_types::bridge::BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER;
     use sui_types::bridge::{
         BridgeChainId, BRIDGE_CREATE_FUNCTION_NAME, BRIDGE_INIT_COMMITTEE_FUNCTION_NAME,
         BRIDGE_MODULE_NAME,
@@ -671,7 +671,11 @@ mod checked {
                         }
                         EndOfEpochTransactionKind::BridgeCommitteeInit(bridge_shared_version) => {
                             assert!(protocol_config.enable_bridge());
-                            builder = setup_bridge_committee_update(builder, bridge_shared_version)
+                            builder = setup_bridge_committee_update(
+                                protocol_config.minimal_threshold_for_bridge_committee_as_option(),
+                                builder,
+                                bridge_shared_version,
+                            )
                         }
                     }
                 }
@@ -1099,6 +1103,7 @@ mod checked {
     }
 
     fn setup_bridge_committee_update(
+        minimal_threshold_for_bridge_committee: Option<u64>,
         mut builder: ProgrammableTransactionBuilder,
         bridge_shared_version: SequenceNumber,
     ) -> ProgrammableTransactionBuilder {
@@ -1121,11 +1126,11 @@ mod checked {
             vec![system_state],
         );
 
-        // Hardcoding min stake participation to 75.00%
-        // TODO: We need to set a correct value or make this configurable.
+        let min_stake_participation_percentage =
+            get_minimal_threshold_for_bridge_committee(minimal_threshold_for_bridge_committee);
         let min_stake_participation_percentage = builder
             .input(CallArg::Pure(
-                bcs::to_bytes(&BRIDGE_COMMITTEE_MINIMAL_VOTING_POWER).unwrap(),
+                bcs::to_bytes(&min_stake_participation_percentage).unwrap(),
             ))
             .unwrap();
 
