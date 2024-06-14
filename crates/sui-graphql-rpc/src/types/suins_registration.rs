@@ -289,7 +289,7 @@ impl SuinsRegistration {
         name: DynamicFieldName,
     ) -> Result<Option<DynamicField>> {
         OwnerImpl::from(&self.super_.super_)
-            .dynamic_field(ctx, name, Some(self.super_.super_.version_impl()))
+            .dynamic_field(ctx, name, self.super_.root_version())
             .await
     }
 
@@ -306,7 +306,7 @@ impl SuinsRegistration {
         name: DynamicFieldName,
     ) -> Result<Option<DynamicField>> {
         OwnerImpl::from(&self.super_.super_)
-            .dynamic_object_field(ctx, name, Some(self.super_.super_.version_impl()))
+            .dynamic_object_field(ctx, name, self.super_.root_version())
             .await
     }
 
@@ -323,14 +323,7 @@ impl SuinsRegistration {
         before: Option<object::Cursor>,
     ) -> Result<Connection<String, DynamicField>> {
         OwnerImpl::from(&self.super_.super_)
-            .dynamic_fields(
-                ctx,
-                first,
-                after,
-                last,
-                before,
-                Some(self.super_.super_.version_impl()),
-            )
+            .dynamic_fields(ctx, first, after, last, before, self.super_.root_version())
             .await
     }
 
@@ -509,7 +502,8 @@ impl NameService {
         // name_record. We then assign it to the correct field on `domain_expiration` based on the
         // address.
         for result in results {
-            let object = Object::try_from_stored_history_object(result, checkpoint_viewed_at)?;
+            let object =
+                Object::try_from_stored_history_object(result, checkpoint_viewed_at, None)?;
             let move_object = MoveObject::try_from(&object).map_err(|_| {
                 Error::Internal(format!(
                     "Expected {0} to be a NameRecord, but it's not a Move Object.",

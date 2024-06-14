@@ -111,12 +111,11 @@ impl DynamicField {
             let obj = MoveObject::query(
                 ctx,
                 self.df_object_id,
-                Object::under_parent(
-                    // TODO (RPC-131): The dynamic object field value's version should be bounded by
-                    // the field's parent version, not the version of the field object itself.
-                    self.super_.super_.version_impl(),
-                    self.super_.super_.checkpoint_viewed_at,
-                ),
+                if let Some(parent_version) = self.root_version() {
+                    Object::under_parent(parent_version, self.super_.super_.checkpoint_viewed_at)
+                } else {
+                    Object::latest_at(self.super_.super_.checkpoint_viewed_at)
+                },
             )
             .await
             .extend()?;
@@ -285,7 +284,11 @@ impl DynamicField {
             // checkpoint found on the cursor.
             let cursor = stored.cursor(checkpoint_viewed_at).encode_cursor();
 
-            let object = Object::try_from_stored_history_object(stored, checkpoint_viewed_at)?;
+            let object = Object::try_from_stored_history_object(
+                stored,
+                checkpoint_viewed_at,
+                parent_version,
+            )?;
 
             let move_ = MoveObject::try_from(&object).map_err(|_| {
                 Error::Internal(format!(
@@ -299,6 +302,10 @@ impl DynamicField {
         }
 
         Ok(conn)
+    }
+
+    pub(crate) fn root_version(&self) -> Option<u64> {
+        self.super_.root_version()
     }
 }
 
