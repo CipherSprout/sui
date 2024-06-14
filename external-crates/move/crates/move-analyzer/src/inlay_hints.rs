@@ -106,7 +106,7 @@ fn additional_hint_info(sp!(_, t): &N::Type, symbols: &Symbols) -> Option<InlayH
         return None;
     };
 
-    let struct_def_loc = DefLoc::new(mod_defs.fhash(), struct_def.name_start());
+    let struct_def_loc = DefLoc::new(mod_defs.fhash(), struct_def.name_start);
     let Some(struct_def_info) = symbols.def_info(&struct_def_loc) else {
         return None;
     };
