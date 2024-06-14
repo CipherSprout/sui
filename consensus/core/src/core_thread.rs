@@ -31,6 +31,11 @@ enum CoreThreadCommand {
     NewBlock(Round, oneshot::Sender<()>, bool),
     /// Request missing blocks that need to be synced.
     GetMissing(oneshot::Sender<BTreeSet<BlockRef>>),
+    /// Sets the minimum propose round for the proposer. This is primarily used when the node
+    /// is recovering and trying to figure out from the network its last proposed block/round and
+    /// set it accordingly to `[Core]`. It will also a force creating a new block for the `round + 1`
+    /// to ensure liveness.
+    SetMinProposeRound(Round, oneshot::Sender<()>),
 }
 
 #[derive(Error, Debug)]
@@ -54,6 +59,8 @@ pub trait CoreThreadDispatcher: Sync + Send + 'static {
     /// This is only used by core to decide if it should propose new blocks.
     /// It is not a guarantee that produced blocks will be accepted by peers.
     fn set_consumer_availability(&self, available: bool) -> Result<(), CoreError>;
+
+    async fn set_min_propose_round(&self, round: Round) -> Result<(), CoreError>;
 }
 
 pub(crate) struct CoreThreadHandle {
@@ -101,6 +108,12 @@ impl CoreThread {
                         CoreThreadCommand::GetMissing(sender) => {
                             let _scope = monitored_scope("CoreThread::loop::get_missing");
                             sender.send(self.core.get_missing_blocks()).ok();
+                        }
+                        CoreThreadCommand::SetMinProposeRound(round, sender) => {
+                            let _scope = monitored_scope("CoreThread::loop::set_min_propose_round");
+                            self.core.set_min_propose_round(round);
+                            self.core.new_block(round + 1, true)?;
+                            sender.send(()).ok();
                         }
                     }
                 }
@@ -208,6 +221,13 @@ impl CoreThreadDispatcher for ChannelCoreThreadDispatcher {
         self.tx_consumer_availability
             .send(available)
             .map_err(|e| Shutdown(e.to_string()))
+    }
+
+    async fn set_min_propose_round(&self, round: Round) -> Result<(), CoreError> {
+        let (sender, receiver) = oneshot::channel();
+        self.send(CoreThreadCommand::SetMinProposeRound(round, sender))
+            .await;
+        receiver.await.map_err(|e| Shutdown(e.to_string()))
     }
 }
 
