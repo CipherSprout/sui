@@ -11698,6 +11698,7 @@ dependencies = [
  "assert_cmd",
  "async-recursion",
  "async-trait",
+ "axum",
  "bcs",
  "bin-version",
  "bip32",
@@ -11706,11 +11707,13 @@ dependencies = [
  "colored",
  "csv",
  "datatest-stable",
+ "diesel",
  "expect-test",
  "fastcrypto",
  "fastcrypto-zkp",
  "fs_extra",
  "futures",
+ "http",
  "im",
  "inquire",
  "insta",
@@ -11743,9 +11746,13 @@ dependencies = [
  "shlex",
  "signature 1.6.4",
  "sui-bridge",
+ "sui-cluster-test",
  "sui-config",
  "sui-execution",
+ "sui-faucet",
  "sui-genesis-builder",
+ "sui-graphql-rpc",
+ "sui-indexer",
  "sui-json",
  "sui-json-rpc-types",
  "sui-keys",
@@ -11771,8 +11778,11 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml 0.7.4",
+ "tower",
+ "tower-http",
  "tracing",
  "unescape",
+ "uuid 1.2.2",
 ]
 
 [[package]]
@@ -12203,7 +12213,6 @@ dependencies = [
  "reqwest",
  "serde_json",
  "shared-crypto",
- "sui",
  "sui-config",
  "sui-core",
  "sui-faucet",
@@ -12587,7 +12596,6 @@ dependencies = [
  "scopeguard",
  "serde",
  "shared-crypto",
- "sui",
  "sui-config",
  "sui-json-rpc-types",
  "sui-keys",
@@ -14043,23 +14051,6 @@ dependencies = [
  "sui-move-build",
  "sui-sdk 1.28.0",
  "sui-types",
-]
-
-[[package]]
-name = "sui-test-validator"
-version = "1.28.0"
-dependencies = [
- "anyhow",
- "axum",
- "clap",
- "http",
- "sui-cluster-test",
- "sui-faucet",
- "telemetry-subscribers",
- "tokio",
- "tower",
- "tower-http",
- "uuid 1.2.2",
 ]
 
 [[package]]

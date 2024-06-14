@@ -7,6 +7,7 @@ pub mod client_commands;
 pub mod client_ptb;
 pub mod console;
 pub mod displays;
+pub mod faucet;
 pub mod fire_drill;
 pub mod genesis_ceremony;
 pub mod genesis_inspector;
