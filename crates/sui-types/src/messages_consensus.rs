@@ -10,7 +10,7 @@ use crate::messages_checkpoint::{
 use crate::transaction::CertifiedTransaction;
 use byteorder::{BigEndian, ReadBytesExt};
 use fastcrypto::groups::bls12381;
-use fastcrypto_tbls::dkg;
+use fastcrypto_tbls::{dkg, dkg_v0, dkg_v1};
 use fastcrypto_zkp::bn254::zk_login::{JwkId, JWK};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -216,6 +216,64 @@ impl ConsensusTransactionKind {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
+pub enum VersionedDkgMessage {
+    V0(dkg_v0::Message<bls12381::G2Element, bls12381::G2Element>),
+    V1(dkg_v1::Message<bls12381::G2Element, bls12381::G2Element>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VersionedDkgConfimation {
+    V0(dkg::Confirmation<bls12381::G2Element>),
+    V1(dkg::Confirmation<bls12381::G2Element>),
+}
+impl Debug for VersionedDkgMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VersionedDkgMessage::V0(msg) => write!(
+                f,
+                "DKG V0 Message with sender={}, vss_pk.degree={}, encrypted_shares.len()={}",
+                msg.sender,
+                msg.vss_pk.degree(),
+                msg.encrypted_shares.len(),
+            ),
+            VersionedDkgMessage::V1(msg) => write!(
+                f,
+                "DKG V1 Message with sender={}, vss_pk.degree={}, encrypted_shares.len()={}",
+                msg.sender,
+                msg.vss_pk.degree(),
+                msg.encrypted_shares.len(),
+            ),
+        }
+    }
+}
+
+impl VersionedDkgMessage {
+    pub fn sender(&self) -> u16 {
+        match self {
+            VersionedDkgMessage::V0(msg) => msg.sender,
+            VersionedDkgMessage::V1(msg) => msg.sender,
+        }
+    }
+}
+
+impl VersionedDkgConfimation {
+    pub fn sender(&self) -> u16 {
+        match self {
+            VersionedDkgConfimation::V0(msg) => msg.sender,
+            VersionedDkgConfimation::V1(msg) => msg.sender,
+        }
+    }
+
+    pub fn num_of_complaints(&self) -> usize {
+        match self {
+            VersionedDkgConfimation::V0(msg) => msg.complaints.len(),
+            VersionedDkgConfimation::V1(msg) => msg.complaints.len(),
+        }
+    }
+}
+
 impl ConsensusTransaction {
     pub fn new_certificate_message(
         authority: &AuthorityName,
@@ -291,9 +349,15 @@ impl ConsensusTransaction {
 
     pub fn new_randomness_dkg_message(
         authority: AuthorityName,
-        message: &dkg::Message<bls12381::G2Element, bls12381::G2Element>,
+        versioned_message: &VersionedDkgMessage,
     ) -> Self {
-        let message = bcs::to_bytes(message).expect("message serialization should not fail");
+        let message = match versioned_message {
+            VersionedDkgMessage::V0(msg) => {
+                // Old version does not use the enum, so we need to serialize it separately.
+                bcs::to_bytes(msg).expect("message serialization should not fail")
+            }
+            _ => bcs::to_bytes(versioned_message).expect("message serialization should not fail"),
+        };
         let mut hasher = DefaultHasher::new();
         message.hash(&mut hasher);
         let tracking_id = hasher.finish().to_le_bytes();
@@ -302,13 +366,19 @@ impl ConsensusTransaction {
             kind: ConsensusTransactionKind::RandomnessDkgMessage(authority, message),
         }
     }
-
     pub fn new_randomness_dkg_confirmation(
         authority: AuthorityName,
-        confirmation: &dkg::Confirmation<bls12381::G2Element>,
+        versioned_confirmation: &VersionedDkgConfimation,
     ) -> Self {
-        let confirmation =
-            bcs::to_bytes(confirmation).expect("message serialization should not fail");
+        let confirmation = match versioned_confirmation {
+            VersionedDkgConfimation::V0(msg) => {
+                // Old version does not use the enum, so we need to serialize it separately.
+                bcs::to_bytes(msg).expect("message serialization should not fail")
+            }
+            _ => bcs::to_bytes(versioned_confirmation)
+                .expect("message serialization should not fail"),
+        };
+
         let mut hasher = DefaultHasher::new();
         confirmation.hash(&mut hasher);
         let tracking_id = hasher.finish().to_le_bytes();
