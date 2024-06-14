@@ -11,23 +11,23 @@ If you haven't already, you need to [install Sui CLI](./sui-install.mdx) on your
 To start the local network, run the following command after you installed Sui CLI.
 
 ```bash
-RUST_LOG="off,sui_node=info" sui start --with-faucet --random-genesis
+RUST_LOG="off,sui_node=info" sui start --with-faucet --force-regenesis
 ```
 
 This command:
 * calls the Sui CLI binary with two flags:
  * `--with-faucet` to start a faucet service
- * `--random-genesis` to generate a new genesis and not persist the local network state
+ * `--force-regenesis` to generate a new genesis and not persist the local network state
 * instructs Rust to set specific logging through the `RUST_LOG`=`off,sui_node=info` flags, which turns off logging for all components except `sui-node`. If you want to see more detailed logs, you can remove `RUST_LOG` from the command.
 
 :::info
-Each time you start the network by passing `--random-genesis`, the local network starts from a random genesis with no previous data, and the local network is not persisted. If you'd like to persist data, skip passing the `--random-genesis` flag. For more details, see the [Persist local network state](#persist-local-network) section.
+Each time you start the network by passing `--force-regenesis`, the local network starts from a random genesis with no previous data, and the local network is not persisted. If you'd like to persist data, skip passing the `--force-regenesis` flag. For more details, see the [Persist local network state](#persist-local-network) section.
 :::
 
 To customize your local Sui network, such as starting other services or changing default ports and hosts, include additional flags or options in the `sui start` command:
 
 ```
-      --random-genesis                         A new genesis is created each time this flag is set, and state is not persisted between runs
+      --force-regenesis                         A new genesis is created each time this flag is set, and state is not persisted between runs
       --with-graphql                           Start a GraphQL server with default host and port: 127.0.0.1:8000. Note that GraphQL requires a running indexer
       --with-faucet                            Start a faucet with default host and port: 127.0.0.1:9123
       --with-indexer                           Start an indexer with default host and port: 0.0.0.0:9124. The indexer will be started in writer mode and reader mode
@@ -41,8 +41,8 @@ To customize your local Sui network, such as starting other services or changing
       --pg-db-name <PG_DB_NAME>                DB name for the Indexer Postgres DB. Default DB name is sui_indexer [default: sui_indexer]
       --pg-user <PG_USER>                      DB username for the Indexer Postgres DB. Default username is postgres [default: postgres]
       --pg-password <PG_PASSWORD>              DB password for the Indexer Postgres DB. Default password is postgrespw [default: postgrespw]
-      --epoch-duration-ms <EPOCH_DURATION_MS>  Set the epoch duration. Can only be used when `--random-genesis` flag is passed or if there's no genesis config and one will be auto-generated. When this flag is not set but
-                                               `--random-genesis` is set, the epoch duration will be set to 60 seconds
+      --epoch-duration-ms <EPOCH_DURATION_MS>  Set the epoch duration. Can only be used when `--force-regenesis` flag is passed or if there's no genesis config and one will be auto-generated. When this flag is not set but
+                                               `--force-regenesis` is set, the epoch duration will be set to 60 seconds
       --no-full-node                           Start the network without a fullnode
 ```
 
@@ -52,7 +52,7 @@ Use `sui start --help` to see these options in your console.
 
 By default, when using `sui start` the command uses an existing genesis and network configuration if the `~/.sui/sui_config` folder exists and includes a `genesis.blob` file. If the folder doesn't exist, it creates the folder and generates a new genesis configuration. If you pass `--network.config`, the command checks for the `genesis.blob` file and network config file.
 
-Whenever you stop and start the network without passing the `--random-genesis` flag, all history is preserved and accessible.
+Whenever you stop and start the network without passing the `--force-regenesis` flag, all history is preserved and accessible.
 
 :::info
 To generate a custom genesis, use the `sui genesis` command and pass the desired custom values. For more information about possible flags and options, run `sui genesis --help`.

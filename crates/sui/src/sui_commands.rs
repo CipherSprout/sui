@@ -53,7 +53,7 @@ use tempfile::tempdir;
 use tracing;
 use tracing::info;
 
-const NUM_VALIDATORS: usize = 4;
+const DEFAULT_EPOCH_DURATION_MS: u64 = 60_000;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Parser)]
@@ -78,9 +78,10 @@ pub enum SuiCommand {
         config_dir: Option<std::path::PathBuf>,
 
         /// A new genesis is created each time this flag is set, and state is not persisted between
-        /// runs.
+        /// runs. Only use this flag when you want to start the network from scratch every time you
+        /// run this command.
         #[clap(long)]
-        random_genesis: bool,
+        force_regenesis: bool,
 
         /// Start a GraphQL server with default host and port: 127.0.0.1:8000. Note that GraphQL
         /// requires a running indexer.
@@ -136,9 +137,9 @@ pub enum SuiCommand {
         #[clap(long, default_value = "postgrespw")]
         pg_password: String,
 
-        /// Set the epoch duration. Can only be used when `--random-genesis` flag is passed or if
+        /// Set the epoch duration. Can only be used when `--force-regenesis` flag is passed or if
         /// there's no genesis config and one will be auto-generated. When this flag is not set but
-        /// `--random-genesis` is set, the epoch duration will be set to 60 seconds.
+        /// `--force-regenesis` is set, the epoch duration will be set to 60 seconds.
         #[clap(long)]
         epoch_duration_ms: Option<u64>,
 
@@ -298,7 +299,7 @@ impl SuiCommand {
             }
             SuiCommand::Start {
                 config_dir,
-                random_genesis,
+                force_regenesis,
                 with_graphql,
                 with_faucet,
                 with_indexer,
@@ -320,7 +321,7 @@ impl SuiCommand {
                     with_faucet,
                     with_graphql,
                     with_indexer,
-                    random_genesis,
+                    force_regenesis,
                     epoch_duration_ms,
                     indexer_rpc_port,
                     fullnode_rpc_port,
@@ -514,7 +515,7 @@ async fn start(
     with_faucet: bool,
     with_graphql: bool,
     with_indexer: bool,
-    random_genesis: bool,
+    force_regenesis: bool,
     epoch_duration_ms: Option<u64>,
     indexer_rpc_port: u16,
     fullnode_rpc_port: u16,
@@ -528,6 +529,13 @@ async fn start(
     pg_user: String,
     pg_password: String,
 ) -> Result<(), anyhow::Error> {
+    if force_regenesis {
+        ensure!(
+            config.is_none(),
+            "Cannot pass `--force-regenesis` and `--network.config` at the same time."
+        );
+    }
+
     if with_graphql {
         ensure!(
             with_indexer,
@@ -545,11 +553,11 @@ async fn start(
         );
     }
 
-    if epoch_duration_ms.is_some() && genesis_blob_exists(config.clone()) && !random_genesis {
+    if epoch_duration_ms.is_some() && genesis_blob_exists(config.clone()) && !force_regenesis {
         bail!(
-            "Epoch duration can only be set when passing the `--random-genesis` flag, or when \
+            "Epoch duration can only be set when passing the `--force-regenesis` flag, or when \
             there is no genesis configuration in the default Sui configuration folder or the given \
-            config_dir.",
+            network.config argument.",
         );
     }
 
@@ -565,21 +573,17 @@ async fn start(
 
     let data_ingestion_path = tempdir()?.into_path();
     let mut swarm_builder = Swarm::builder();
-
     // If this is set, then no data will be persisted between runs, and a new genesis will be
     // generated each run.
-    if random_genesis {
-        swarm_builder = swarm_builder.committee_size(NonZeroUsize::new(NUM_VALIDATORS).unwrap());
+    if force_regenesis {
+        swarm_builder =
+            swarm_builder.committee_size(NonZeroUsize::new(DEFAULT_NUMBER_OF_AUTHORITIES).unwrap());
         let genesis_config = GenesisConfig::custom_genesis(1, 100);
         swarm_builder = swarm_builder.with_genesis_config(genesis_config);
-        if let Some(config) = config.clone() {
-            swarm_builder = swarm_builder.dir(config);
-        }
-
         let epoch_duration_ms = if let Some(epoch_ms) = epoch_duration_ms {
             epoch_ms
         } else {
-            60000
+            DEFAULT_EPOCH_DURATION_MS
         };
         swarm_builder = swarm_builder.with_epoch_duration_ms(epoch_duration_ms);
     } else {

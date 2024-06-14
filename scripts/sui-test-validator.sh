@@ -7,7 +7,7 @@ This script offers backward compatibiltiy, but ideally, you should migrate to su
 
 To recreate the exact basic functionality of sui-test-validator, you must use the following options:
   * --with-faucet --> to start the faucet server on the default host and port
-  * --random-genesis --> to start the local network without persisting the state and from a random genesis
+  * --force-regenesis --> to start the local network without persisting the state and from a random genesis
 
 You can also use the following options to start the local network with more features:
   * --with-indexer --> to start the indexer on the default host and port. Note that this requires a Postgres database to be running locally, or you need to set the different options to connect to a remote indexer database.
@@ -39,8 +39,8 @@ for arg in "$@"; do
 
 done
 
-cmd="sui start --with-faucet --random-genesis"
-# To maintain compatibility, when passing a network configuration in a directory, --random-genesis cannot be passed.
+cmd="sui start --with-faucet --force-regenesis"
+# To maintain compatibility, when passing a network configuration in a directory, --force-regenesis cannot be passed.
 if [ "$config_dir" = true ]; then
     echo "Starting with the provided network configuration."
     cmd="sui start --with-faucet"

@@ -27,7 +27,7 @@ brew services start postgresql@version
 ### Local Development(Recommended)
 
 Start a local network using `sui start`. For more information, refer to `sui start --help`:
-* `cargo run --bin sui -- start --with-faucet --random-genesis`
+* `cargo run --bin sui -- start --with-faucet --force-regenesis`
 
 
 ### Running standalone indexer
